@@ -1,0 +1,14 @@
+numpy
+pandas
+scikit-learn
+matplotlib
+# seaborn
+tensorflow
+# jupyter
+# ipykernel
+# opencv-python
+# imbalanced-learn
+python-dotenv
+xgboost
+openpyxl
+imblearn
