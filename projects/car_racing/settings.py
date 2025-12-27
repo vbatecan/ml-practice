@@ -42,6 +42,6 @@ SMOOTHING_ITERATIONS = 5
 WORLD_PADDING = 500
 
 # Radar Settings
-RADAR_COUNT = 5          # Number of sensors
+RADAR_COUNT = 8          # Number of sensors
 RADAR_MAX_DIST = 2000    # Pixels
 RADAR_STEP = 10          # Raycast precision step

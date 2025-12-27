@@ -144,7 +144,8 @@ class Car(pygame.sprite.Sprite):
         
         # Calculate acceleration for display (pixels/sec^2)
         if dt > 0:
-            self.instant_acceleration = (self.speed - self.last_speed) / dt
+            raw_accel = (self.speed - self.last_speed) / dt
+            self.instant_acceleration = max(0, raw_accel)
         self.last_speed = self.speed
         
         # Max Speed Cap
@@ -165,16 +166,25 @@ class Car(pygame.sprite.Sprite):
         if track_mask:
             offset = (self.rect.x, self.rect.y)
             if track_mask.overlap(self.mask, offset):
-                # Simple collision response
-                # 1. Reverse velocity (bounce)
+                collision_velocity = pygame.math.Vector2(self.velocity)
+                
                 self.velocity *= 0
                 
-                if self.velocity.length() < 50:
-                    # If stopped, just push back from heading
+                self.last_speed = 0
+                
+                if collision_velocity.length() < 50:
+                    push_dir = -1
+                    if self.accelerating == -1:
+                        push_dir = 1
+                        
                     rad = math.radians(self.angle)
-                    push = pygame.math.Vector2(math.sin(rad), math.cos(rad)) * 20
-                    self.pos += push
+                    # heading is (-sin, -cos). We want -heading normally (push back).
+                    # -heading is (sin, cos).
+                    
+                    push_vector = pygame.math.Vector2(math.sin(rad), math.cos(rad)) * 20 * push_dir
+                    self.pos += push_vector
                 else:
-                    self.pos += self.velocity.normalize() * 10 
+                    # Bounce back in opposite direction of travel
+                    self.pos += -collision_velocity.normalize() * 10
                     
                 self.rect.center = (round(self.pos.x), round(self.pos.y))
