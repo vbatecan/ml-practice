@@ -19,66 +19,140 @@ class Car(pygame.sprite.Sprite):
         self.pos = pygame.math.Vector2(start_pos)
         self.velocity = pygame.math.Vector2(0, 0)
         self.angle = 0
-        self.acceleration_val = 0
         self.speed = 0
         
         self.mask = pygame.mask.from_surface(self.image)
+        
+        # Input state
+        self.turning = 0 
+        self.accelerating = 0 
+        
+        # Sensor/Radar
+        self.radars = []
+        self.last_speed = 0
+        self.instant_acceleration = 0
 
     def update(self, dt, track_mask=None):
         self.input()
         self.move(dt)
+        self.update_sensors(track_mask)
         self.check_collision(track_mask)
+
+    def update_sensors(self, track_mask):
+        self.radars.clear()
+        if not track_mask: return
+            
+        radar_angles = []
+        if RADAR_COUNT > 0:
+            step_angle = 360 / RADAR_COUNT
+            for i in range(RADAR_COUNT):
+                radar_angles.append(i * step_angle)
+        
+        for angle_offset in radar_angles:
+            check_angle = self.angle + angle_offset
+            rad = math.radians(check_angle)
+            
+            dir_vec = pygame.math.Vector2(-math.sin(rad), -math.cos(rad))
+            start_pos = pygame.math.Vector2(self.rect.center)
+            current_pos = start_pos.copy()
+            
+            dist = 0
+            step = RADAR_STEP
+            
+            while dist < RADAR_MAX_DIST:
+                current_pos += dir_vec * step
+                dist += step
+                
+                int_x, int_y = int(current_pos.x), int(current_pos.y)
+                
+                if 0 <= int_x < track_mask.get_size()[0] and 0 <= int_y < track_mask.get_size()[1]:
+                    if track_mask.get_at((int_x, int_y)):
+                        current_pos -= dir_vec * step
+                        dist -= step
+                        step = 1 # Fine step
+                        while dist < RADAR_MAX_DIST:
+                            current_pos += dir_vec * step
+                            dist += step
+                            int_x, int_y = int(current_pos.x), int(current_pos.y)
+                            if track_mask.get_at((int_x, int_y)):
+                                break
+                            if step == 1 and dist > RADAR_MAX_DIST: break # safety
+                        break
+                else:
+                    break
+            
+            self.radars.append((start_pos, current_pos, dist))
 
     def input(self):
         keys = pygame.key.get_pressed()
-        
+        self.turning = 0
+        if keys[pygame.K_a]:
+            self.turning = 1 # Left
+        if keys[pygame.K_d]:
+            self.turning = -1 # Right
+            
+        self.accelerating = 0
         if keys[pygame.K_w]:
-            self.acceleration_val = ACCELERATION
-        elif keys[pygame.K_s]:
-            self.acceleration_val = -ACCELERATION
-        else:
-            self.acceleration_val = 0
-
-        # Rotate only if moving (arcade feel)
-        if abs(self.speed) > 0.1:
-            rotation_dir = 1 if self.speed > 0 else -1
-            if keys[pygame.K_a]:
-                self.angle += ROTATION_SPEED * rotation_dir
-            elif keys[pygame.K_d]:
-                self.angle -= ROTATION_SPEED * rotation_dir
+            self.accelerating = 1
+        if keys[pygame.K_s]:
+            self.accelerating = -1
 
     def move(self, dt):
-        # Apply acceleration
-        self.speed += self.acceleration_val
-        
-        # Friction
-        if self.speed > 0:
-            self.speed -= FRICTION
-            if self.speed < 0: self.speed = 0
-        elif self.speed < 0:
-            self.speed += FRICTION
-            if self.speed > 0: self.speed = 0
+        if abs(self.speed) > 0:
+            # Scale turning by speed to avoid spinning in place
+            # At 200 px/s ~ 1.0 factor
+            steering_factor = abs(self.speed) / 250.0
+            steering_factor = min(1.2, max(0.1, steering_factor)) # Clamp
             
-        # Max speed
-        if self.speed > MAX_SPEED:
-            self.speed = MAX_SPEED
-        if self.speed < -MAX_SPEED / 2:
-            self.speed = -MAX_SPEED / 2
+            if abs(self.speed) < 10: steering_factor = 0 # Deadzone
             
-        # Compute velocity vector
-        # Angle 0 is UP (negative Y)
-        # Rotation is CCW
+            self.angle += self.turning * TURN_SPEED * steering_factor * dt
+
         rad = math.radians(self.angle)
+        heading = pygame.math.Vector2(-math.sin(rad), -math.cos(rad))
         
-        dx = -math.sin(rad) * self.speed
-        dy = -math.cos(rad) * self.speed
+        # 3. Acceleration
+        if self.accelerating == 1:
+            self.velocity += heading * ACCELERATION * dt
+        elif self.accelerating == -1:
+            dot = self.velocity.dot(heading)
+            if dot > 10: 
+                self.velocity -= heading * BRAKE_STRENGTH * dt
+            else: 
+                self.velocity -= heading * ACCELERATION * dt 
+
+        # 4. Drag and Friction
+        if self.velocity.length() > 0:
+            speed_val = self.velocity.length()
+            drag_force = -self.velocity.normalize() * (DRAG * speed_val * speed_val)
+            friction_force = -self.velocity.normalize() * FRICTION
+            
+            if speed_val < FRICTION * dt:
+                self.velocity = pygame.math.Vector2(0, 0)
+            else:
+                self.velocity += (drag_force + friction_force) * dt
+
+        # 5. Lateral Traction (Drift)
+        if self.velocity.length() > 0:
+            forward_velocity = heading * (self.velocity.dot(heading))
+            lateral_velocity = self.velocity - forward_velocity
+            self.velocity -= lateral_velocity * (DRIFT_FACTOR * dt)
+
+        # 6. Update Position
+        self.pos += self.velocity * dt
+        self.speed = self.velocity.length()
         
-        self.pos += pygame.math.Vector2(dx, dy)
+        # Calculate acceleration for display (pixels/sec^2)
+        if dt > 0:
+            self.instant_acceleration = (self.speed - self.last_speed) / dt
+        self.last_speed = self.speed
         
-        # Boundary Check - Removed for large world
-        # self.pos.x = max(0, min(self.pos.x, WIDTH))
-        # self.pos.y = max(0, min(self.pos.y, HEIGHT))
-        
+        # Max Speed Cap
+        if self.speed > MAX_SPEED:
+            self.velocity.scale_to_length(MAX_SPEED)
+            self.speed = MAX_SPEED
+            
+        # 7. Visual Rotation
         self.rotate()
         self.rect.center = (round(self.pos.x), round(self.pos.y))
 
@@ -90,12 +164,17 @@ class Car(pygame.sprite.Sprite):
     def check_collision(self, track_mask):
         if track_mask:
             offset = (self.rect.x, self.rect.y)
-            # If overlap returns a point, collision occurred
             if track_mask.overlap(self.mask, offset):
-                # Simple collision response: bounce back and stop
-                self.speed = -self.speed * 0.5
+                # Simple collision response
+                # 1. Reverse velocity (bounce)
+                self.velocity *= 0
                 
-                # Move out of collision slightly to prevent sticking
-                rad = math.radians(self.angle)
-                self.pos -= pygame.math.Vector2(-math.sin(rad), -math.cos(rad)) * 5
+                if self.velocity.length() < 50:
+                    # If stopped, just push back from heading
+                    rad = math.radians(self.angle)
+                    push = pygame.math.Vector2(math.sin(rad), math.cos(rad)) * 20
+                    self.pos += push
+                else:
+                    self.pos += self.velocity.normalize() * 10 
+                    
                 self.rect.center = (round(self.pos.x), round(self.pos.y))

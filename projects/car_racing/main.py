@@ -42,9 +42,12 @@ class Game:
     def reset_game(self):
         self.track.reset()
         self.car.pos = pygame.math.Vector2(self.track.start_position)
+        self.car.velocity = pygame.math.Vector2(0, 0)
         self.car.speed = 0
         self.car.angle = 0
-        self.car.velocity = pygame.math.Vector2(0, 0)
+        self.car.last_speed = 0
+        self.car.instant_acceleration = 0
+        self.car.radars.clear()
 
     def update(self):
         self.car.update(self.dt, self.track.mask)
@@ -69,6 +72,19 @@ class Game:
         car_pos = self.car.rect.topleft - camera_offset
         self.screen.blit(self.car.image, car_pos)
         
+        # Draw Sensors / Radars
+        for start, end, dist in self.car.radars:
+            # Apply camera offset to points
+            start_off = start - camera_offset
+            end_off = end - camera_offset
+            
+            line_color = GREEN
+            if dist < 50: line_color = RED
+            elif dist < 100: line_color = (255, 255, 0) # Yellow
+            
+            pygame.draw.line(self.screen, line_color, start_off, end_off, 1)
+            pygame.draw.circle(self.screen, line_color, (int(end_off.x), int(end_off.y)), 3)
+        
         # HUD (Static, no offset)
         self.draw_hud()
         
@@ -76,28 +92,56 @@ class Game:
 
     def draw_hud(self):
         # Semi-transparent panel
-        hud_surf = pygame.Surface((280, 130), pygame.SRCALPHA)
+        # Make it tally dynamically or just large enough
+        hud_surf = pygame.Surface((280, 300), pygame.SRCALPHA)
         pygame.draw.rect(hud_surf, (0, 0, 0, 128), hud_surf.get_rect(), border_radius=10)
         self.screen.blit(hud_surf, (10, 10))
 
         # Speed
-        # Multiplied by 10 for a "visual" speed unit
-        display_speed = abs(self.car.speed * 20)
+        # Max Phys Speed = 800. Let's call that 200 km/h. Factor = 0.25
+        display_speed = int(self.car.speed * 0.25)
         speed_color = GREEN if display_speed < 100 else (RED if display_speed > 160 else WHITE)
-        speed_surf = self.font.render(f"Speed: {int(display_speed)} km/h", True, speed_color)
+        speed_surf = self.font.render(f"Speed: {display_speed} km/h", True, speed_color)
         self.screen.blit(speed_surf, (20, 20))
 
-        # Acceleration
-        accel_val = self.car.acceleration_val
-        accel_str = f"{accel_val:.2f}"
-        accel_surf = self.font.render(f"Accel Input: {accel_str}", True, WHITE)
+        # Acceleration Check
+        accel_val = int(self.car.instant_acceleration)
+        accel_surf = self.font.render(f"Accel: {accel_val}", True, WHITE)
         self.screen.blit(accel_surf, (20, 50))
         
         # Controls info
         controls_surf = self.font.render("WASD to Drive", True, GREY)
         self.screen.blit(controls_surf, (20, 80))
+        
+        # Sensor Data
+        # Sensor Data
+        # We can dynamically stringify them
+        # If too many, maybe just show first few or compact
+        font_height = 20
+        start_y = 105
+        
+        if self.car.radars:
+            # Create a string representation
+            # e.g. "S0: 100 S1: 200 ..."
+            sensor_str = ""
+            for i, r in enumerate(self.car.radars):
+                dist = int(r[2])
+                sensor_str += f"{dist} "
+                if len(sensor_str) > 30: # Wrap line
+                    sensor_surf = self.font.render(sensor_str, True, WHITE)
+                    self.screen.blit(sensor_surf, (20, start_y))
+                    start_y += font_height
+                    sensor_str = ""
+            
+            if sensor_str:
+                sensor_surf = self.font.render(sensor_str, True, WHITE)
+                self.screen.blit(sensor_surf, (20, start_y))
+                start_y += font_height
+
         regen_surf = self.font.render("R: New Track | Esc: Quit", True, GREY)
-        self.screen.blit(regen_surf, (20, 105))
+        self.screen.blit(regen_surf, (20, start_y + 5))
+
+
 
 if __name__ == '__main__':
     game = Game()
