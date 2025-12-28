@@ -1,8 +1,16 @@
 import pygame
 import sys
+import math
 from settings import *
 from car import Car
 from track import Track
+import csv
+import datetime
+import os
+import tensorflow as tf
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler
 
 class Game:
     def __init__(self):
@@ -16,6 +24,51 @@ class Game:
         self.car = Car(self.track.start_position)
         
         self.running = True
+        self.telemetry_data = []
+
+        self.total_distance = 0.0
+        self.collision_count = 0
+
+        self.model = None
+        self.scaler = None
+        
+        self.current_controls = (0, 0, 0, 0) # w, a, s, d
+        self.steering_ema = 0.0 # Smoothed steering value (-1 to 1)
+
+        # Flashlight Surface
+        if FLASHLIGHT_MODE:
+            self.flashlight_surf = pygame.Surface((WIDTH, HEIGHT))
+            self.flashlight_surf.fill(BLACK)
+            self.flashlight_surf.set_colorkey(WHITE) # White becomes transparent
+            # Draw the transparent hole
+            pygame.draw.circle(self.flashlight_surf, WHITE, (WIDTH // 2, HEIGHT // 2), FLASHLIGHT_RADIUS)
+
+        if MODEL_PLAYING:
+            print("Loading Model...")
+            try:
+                self.model = tf.keras.models.load_model(MODEL_PATH, compile=False)
+                print("Model loaded.")
+                
+                print("Loading Data for Scaler...")
+                
+                df = pd.read_csv(DATA_PATH)
+                x_train_source = df.drop(columns=["W", "A", "S", "D"], axis=1)
+                
+                self.feature_columns = x_train_source.columns.tolist()
+
+                self.scaler = StandardScaler()
+                self.scaler.fit(x_train_source)
+                print("Scaler fitted.")
+                
+                # Pre-calculate fallback radar data
+                self.fallback_radar_data = [0, 1, 1] * RADAR_COUNT
+                
+            except Exception as e:
+                print(f"Failed to load model or scaler: {e}")
+                print("Falling back to manual control.")
+                self.model = None
+
+
 
     def run(self):
         while self.running:
@@ -36,6 +89,8 @@ class Game:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r:
                     self.reset_game()
+                if event.key == pygame.K_u:
+                    self.save_telemetry()
                 if event.key == pygame.K_ESCAPE:
                     self.running = False
 
@@ -47,10 +102,184 @@ class Game:
         self.car.angle = 0
         self.car.last_speed = 0
         self.car.instant_acceleration = 0
+
+        self.car.instant_acceleration = 0
         self.car.radars.clear()
+        self.car.instant_acceleration = 0
+        self.car.radars.clear()
+        
+        self.total_distance = 0.0
+        self.collision_count = 0
+
+
+    def save_telemetry(self):
+        if not self.telemetry_data:
+            return
+            
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"racing_data_{timestamp}.csv"
+        
+        print(f"Saving {len(self.telemetry_data)} rows to {filename}...")
+        
+        try:
+            with open(filename, 'w', newline='') as f:
+                writer = csv.writer(f)
+                
+                # Create Header
+                # W, A, S, D, Acceleration, R1, R2, ..., Rn
+                # Create Header
+                # W, A, S, D, Speed, SteerAngle, Collision, Acceleration, R0, R1, ..., Rn
+                header = ["W", "A", "S", "D", "Speed", "SteeringAngle", "Collision", "Acceleration"]
+                for i in range(RADAR_COUNT):
+                    header.append(f"R{i}")
+                    header.append(f"R{i}_Warn")
+                    header.append(f"R{i}_Dang")
+                
+                writer.writerow(header)
+                writer.writerows(self.telemetry_data)
+            print("Save completed.")
+            self.telemetry_data = [] # Clear data after saving
+        except Exception as e:
+            print(f"Error saving data: {e}")
+
+    def record_telemetry(self):
+        # Use current applied controls (whether manual or model)
+        w, a, s, d = self.current_controls
+        
+        speed = round(self.car.speed, 2)
+        angle = round(self.car.angle, 2)
+        collided = 1 if self.car.collided else 0
+        accel = round(self.car.instant_acceleration, 2)
+        
+        radars = []
+        if len(self.car.radars) == RADAR_COUNT:
+            for r in self.car.radars:
+                dist = int(r[2])
+                radars.append(dist)
+                
+                # Add Warning and Danger flags
+                warn = 1 if dist < RADAR_WARNING_DIST else 0
+                dang = 1 if dist < RADAR_DANGER_DIST else 0
+                radars.append(warn)
+                radars.append(dang)
+        else:
+            # Fallback if radars not ready
+            # Assuming 0 distance (collision/error) -> High danger
+            for _ in range(RADAR_COUNT):
+                radars.append(0) # Distance
+                radars.append(1) # Warn
+                radars.append(1) # Dang
+            
+        row = [w, a, s, d, speed, angle, collided, accel] + radars
+        
+        # De-duplication: Only save if changed (ignore first row for simplicity or check)
+        if self.telemetry_data:
+            last_row = self.telemetry_data[-1]
+            if row == last_row:
+                return # Skip duplicate
+                
+        self.telemetry_data.append(row)
+
 
     def update(self):
-        self.car.update(self.dt, self.track.mask)
+        controls = None
+        
+        if MODEL_PLAYING and self.model and self.scaler:
+            speed = self.car.speed
+            angle = self.car.angle
+            collided = 1 if self.car.collided else 0
+            accel = self.car.instant_acceleration
+            
+            radars = []
+            if len(self.car.radars) == RADAR_COUNT:
+                for r in self.car.radars:
+                    dist = r[2]
+                    # Append dist, warn, dang
+                    radars.extend([dist, 1 if dist < RADAR_WARNING_DIST else 0, 1 if dist < RADAR_DANGER_DIST else 0])
+            else:
+                radars = self.fallback_radar_data
+                
+            input_data = [speed, angle, collided, accel] + radars
+            
+            # Create DataFrame with proper column names to avoid warnings
+            input_df = pd.DataFrame([input_data], columns=self.feature_columns)
+            
+            input_scaled = self.scaler.transform(input_df)
+            
+            prediction = self.model.predict(input_scaled, verbose=0)
+            pred = prediction[0] # First sample
+            
+            # Thresholding for Throttle (W/S) - Keep binary or maybe probability?
+            # Usually throttle is fine as on/off, but steering needs smoothing.
+            w = 1 if pred[0] > 0.5 else 0
+            s = 1 if pred[2] > 0.5 else 0
+            
+            # Smooth Steering (A/D)
+            # Pass raw probability or target to Car, Car handles smoothing.
+            raw_a = pred[1]
+            raw_d = pred[3]
+            
+            # Map back to A/D for controls tuple
+            # If Raw A > Raw D, we lean left.
+            # We can just pass the raw values or a net value.
+            # Car.input accepts (w, a, s, d).
+            # If we pass (w, raw_a, s, raw_d), Car.input calculates target = raw_a - raw_d.
+            # This works perfectly.
+            a = 1 if raw_a > 0.5 else 0
+            d = 1 if raw_d > 0.5 else 0
+            
+            # Auto-push logic (keep it)
+            if speed < 50:
+                w = 1
+
+            controls = (w, a, s, d)
+            
+        # Capture manual controls if model isn't playing
+        if controls is None:
+            keys = pygame.key.get_pressed()
+            w = 1 if keys[pygame.K_w] else 0
+            a = 1 if keys[pygame.K_a] else 0
+            s = 1 if keys[pygame.K_s] else 0
+            d = 1 if keys[pygame.K_d] else 0
+            controls = (w, a, s, d)
+            
+        self.current_controls = controls
+
+        self.car.update(self.dt, self.track.mask, controls)
+        # Record what actually happened (if manual, keys; if model, model's choice?)
+        # record_telemetry reads keys directly. We should probably update it to record the 'controls' variable.
+        # But for now, if model is playing, keys are 0, so record_telemetry might record 0s unless we mock keys.
+        # Let's just update car first.
+        
+        # If model playing, record_telemetry will record 0s because it reads pygame.key. 
+        # But maybe that's fine, or we want to debug.
+        # Let's leave record_telemetry as is for now.
+        # Record telemetry for both manual and model driving
+        self.record_telemetry()
+        
+        # Stats
+        if self.car.speed > 0:
+            self.total_distance += self.car.speed * self.dt
+        if self.car.collided:
+            self.collision_count += 1
+
+        
+        # Skid marks
+        # Calculate lateral velocity to see if drifting
+        if self.car.velocity.length() > 50:
+            rad = math.radians(self.car.angle)
+            heading = pygame.math.Vector2(-math.sin(rad), -math.cos(rad))
+            forward_velocity = heading * (self.car.velocity.dot(heading))
+            lateral_velocity = self.car.velocity - forward_velocity
+            
+            if lateral_velocity.length() > 20: # Drifting threshold
+                # Draw skid marks on the track image (persistent)
+                # Offset for tires (roughly)
+                p = self.car.pos
+                # We can draw a simple circle or line at tire locations
+                # Just draw one faint dark trace for now at center
+                pygame.draw.circle(self.track.image, (20, 20, 20), (int(p.x), int(p.y)), 10)
+
 
     def draw(self):
         self.screen.fill(BLACK)
@@ -65,26 +294,31 @@ class Game:
         
         # Draw track with offset
         # self.track.image is the big world surface
-        track_pos = self.track.rect.topleft - camera_offset
-        self.screen.blit(self.track.image, track_pos)
+        if not RADAR_VIEW_ONLY:
+            track_pos = self.track.rect.topleft - camera_offset
+            self.screen.blit(self.track.image, track_pos)
         
         # Draw car with offset
         car_pos = self.car.rect.topleft - camera_offset
         self.screen.blit(self.car.image, car_pos)
         
         # Draw Sensors / Radars
-        for start, end, dist in self.car.radars:
-            # Apply camera offset to points
-            start_off = start - camera_offset
-            end_off = end - camera_offset
-            
-            line_color = GREEN
-            if dist < 50: line_color = RED
-            elif dist < 100: line_color = (255, 255, 0) # Yellow
-            
-            pygame.draw.line(self.screen, line_color, start_off, end_off, 1)
-            pygame.draw.circle(self.screen, line_color, (int(end_off.x), int(end_off.y)), 3)
+        if DRAW_RADARS or RADAR_VIEW_ONLY:
+            for start, end, dist in self.car.radars:
+                # Apply camera offset to points
+                start_off = start - camera_offset
+                end_off = end - camera_offset
+                
+                line_color = GREEN
+                if dist < RADAR_DANGER_DIST: line_color = RED
+                elif dist < RADAR_WARNING_DIST: line_color = (255, 255, 0) # Yellow
+                
+                pygame.draw.line(self.screen, line_color, start_off, end_off, 1)
+                pygame.draw.circle(self.screen, line_color, (int(end_off.x), int(end_off.y)), 3)
         
+        if FLASHLIGHT_MODE:
+            self.screen.blit(self.flashlight_surf, (0, 0))
+
         # HUD (Static, no offset)
         self.draw_hud()
         
@@ -110,15 +344,46 @@ class Game:
         self.screen.blit(accel_surf, (20, 50))
         
         # Controls info
-        controls_surf = self.font.render("WASD to Drive", True, GREY)
+        controls_surf = self.font.render("AI Inputs:", True, GREY)
         self.screen.blit(controls_surf, (20, 80))
+        
+        # Draw WASD Visualization
+        # Layout:   W
+        #         A S D
+        base_x, base_y = 150, 80
+        size = 20
+        gap = 5
+        
+        cw, ca, cs, cd = self.current_controls
+        
+        keys = [
+            ("W", float(cw), (base_x + size + gap, base_y)),
+            ("A", float(ca), (base_x, base_y + size + gap)),
+            ("S", float(cs), (base_x + size + gap, base_y + size + gap)),
+            ("D", float(cd), (base_x + (size + gap)*2, base_y + size + gap))
+        ]
+        
+        for k_char, active, (kx, ky) in keys:
+            color = GREEN if active > 0.1 else DARK_GREY
+            pygame.draw.rect(self.screen, color, (kx, ky, size, size), border_radius=3)
+            # Text
+            kt = self.font.render(k_char, True, BLACK if active > 0.1 else WHITE)
+            kt_rect = kt.get_rect(center=(kx + size//2, ky + size//2))
+            self.screen.blit(kt, kt_rect)
+
+        
+        # Odometer & Collisions
+        dist_km = int(self.total_distance / 1000) # Pseudo-km (pixels)
+        stats_surf = self.font.render(f"Dist: {dist_km} | Hits: {self.collision_count}", True, WHITE)
+        self.screen.blit(stats_surf, (20, 130)) # Moved down slightly
         
         # Sensor Data
         # Sensor Data
         # We can dynamically stringify them
         # If too many, maybe just show first few or compact
         font_height = 20
-        start_y = 105
+        start_y = 135
+
         
         if self.car.radars:
             # Create a string representation

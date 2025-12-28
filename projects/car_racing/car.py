@@ -24,16 +24,20 @@ class Car(pygame.sprite.Sprite):
         self.mask = pygame.mask.from_surface(self.image)
         
         # Input state
-        self.turning = 0 
+        self.turning = 0.0 # Actual smoothed turning value
+        self.target_turning = 0.0 # Input target
         self.accelerating = 0 
         
         # Sensor/Radar
         self.radars = []
         self.last_speed = 0
         self.instant_acceleration = 0
+        
+        self.collided = False
 
-    def update(self, dt, track_mask=None):
-        self.input()
+
+    def update(self, dt, track_mask=None, controls=None):
+        self.input(controls)
         self.move(dt)
         self.update_sensors(track_mask)
         self.check_collision(track_mask)
@@ -83,21 +87,41 @@ class Car(pygame.sprite.Sprite):
             
             self.radars.append((start_pos, current_pos, dist))
 
-    def input(self):
-        keys = pygame.key.get_pressed()
-        self.turning = 0
-        if keys[pygame.K_a]:
-            self.turning = 1 # Left
-        if keys[pygame.K_d]:
-            self.turning = -1 # Right
-            
+    def input(self, controls=None):
+        self.target_turning = 0
         self.accelerating = 0
+        
+        if controls:
+            w, a, s, d = controls
+            # Analog steering
+            if a or d:
+                self.target_turning = float(a) - float(d)
+                
+            if w: self.accelerating = 1
+            if s: self.accelerating = -1
+            return
+
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_a]:
+            self.target_turning = 1
+        if keys[pygame.K_d]:
+            self.target_turning = -1
+            
         if keys[pygame.K_w]:
             self.accelerating = 1
         if keys[pygame.K_s]:
             self.accelerating = -1
 
     def move(self, dt):
+        self.prev_pos = self.pos.copy()
+        
+        # Smooth steering
+        # Lerp factor: Adjust for responsiveness. 
+        # 5.0 * dt means it takes ~0.2s to reach target.
+        smoothing_speed = 5.0 
+        diff = self.target_turning - self.turning
+        self.turning += diff * min(smoothing_speed * dt, 1.0)
+        
         if abs(self.speed) > 0:
             # Scale turning by speed to avoid spinning in place
             # At 200 px/s ~ 1.0 factor
@@ -113,7 +137,15 @@ class Car(pygame.sprite.Sprite):
         
         # 3. Acceleration
         if self.accelerating == 1:
-            self.velocity += heading * ACCELERATION * dt
+            # Acceleration dampening ONLY when close to MAX_SPEED
+            # This allows full acceleration for most of the range (0-70%)
+            accel_factor = 1.0
+            if self.speed > MAX_SPEED * 0.7:
+                percent_over = (self.speed - (MAX_SPEED * 0.7)) / (MAX_SPEED * 0.3)
+                accel_factor = 1.0 - percent_over
+                accel_factor = max(0.1, accel_factor) # Minimum 10%
+                
+            self.velocity += heading * ACCELERATION * accel_factor * dt
         elif self.accelerating == -1:
             dot = self.velocity.dot(heading)
             if dot > 10: 
@@ -163,28 +195,18 @@ class Car(pygame.sprite.Sprite):
         self.mask = pygame.mask.from_surface(self.image)
 
     def check_collision(self, track_mask):
+        self.collided = False
         if track_mask:
             offset = (self.rect.x, self.rect.y)
             if track_mask.overlap(self.mask, offset):
-                collision_velocity = pygame.math.Vector2(self.velocity)
+                self.collided = True
                 
-                self.velocity *= 0
-                
-                self.last_speed = 0
-                
-                if collision_velocity.length() < 50:
-                    push_dir = -1
-                    if self.accelerating == -1:
-                        push_dir = 1
-                        
-                    rad = math.radians(self.angle)
-                    # heading is (-sin, -cos). We want -heading normally (push back).
-                    # -heading is (sin, cos).
-                    
-                    push_vector = pygame.math.Vector2(math.sin(rad), math.cos(rad)) * 20 * push_dir
-                    self.pos += push_vector
-                else:
-                    # Bounce back in opposite direction of travel
-                    self.pos += -collision_velocity.normalize() * 10
-                    
+                # Robust collision: revert position
+                self.pos = self.prev_pos.copy()
                 self.rect.center = (round(self.pos.x), round(self.pos.y))
+                
+                # Kill velocity (or bounce slightly)
+                # Simple stop is most robust against getting stuck
+                self.velocity *= 0.5 
+                self.speed = self.velocity.length()
+                self.last_speed = self.speed
