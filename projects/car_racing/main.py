@@ -318,6 +318,28 @@ class Game:
         
         if FLASHLIGHT_MODE:
             self.screen.blit(self.flashlight_surf, (0, 0))
+            
+        if REALISTIC_VISION:
+            # 1. Calculate polygon
+            vision_poly = self.car.get_vision_polygon(self.track.mask)
+            
+            if vision_poly:
+                # 2. Create local polygon by applying camera offset
+                local_poly = [p - camera_offset for p in vision_poly]
+                
+                # 3. Reuse fog surface
+                if not hasattr(self, 'vision_surf'):
+                     self.vision_surf = pygame.Surface((WIDTH, HEIGHT))
+                     self.vision_surf.set_colorkey(WHITE)
+                
+                self.vision_surf.fill(BLACK)
+                # self.vision_surf.set_colorkey(WHITE) # Already set
+                
+                # 4. Draw visibility polygon in WHITE (which becomes transparent)
+                if len(local_poly) > 2:
+                    pygame.draw.polygon(self.vision_surf, WHITE, local_poly)
+                    
+                self.screen.blit(self.vision_surf, (0, 0))
 
         # HUD (Static, no offset)
         self.draw_hud()

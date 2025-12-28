@@ -25,13 +25,13 @@ BRAKE_STRENGTH = 1200    # Pixels/sec^2
 FRICTION = 200           # Natural deceleration (rolling resistance)
 DRAG = 0.00100            # Air resistance factor (v^2)
 TURN_SPEED = 180         # Degrees/sec
-DRIFT_FACTOR = 32       # Higher = less drift (grip), Lower = more drift
+DRIFT_FACTOR = 24       # Higher = less drift (grip), Lower = more drift
 
 # Track settings
 TRACK_WIDTH = 230
 
 # Huge world settings
-NUM_POINTS = 40
+NUM_POINTS = 25
 MIN_RADIUS = 1000
 MAX_RADIUS = 4000
 SMOOTHING_ITERATIONS = 7
@@ -40,10 +40,12 @@ SMOOTHING_ITERATIONS = 7
 WORLD_PADDING = 500
 
 # Radar Settings
-RADAR_COUNT = 8         # Number of sensors
-RADAR_MAX_DIST = 500    # Pixels
-RADAR_STEP = 16          # Raycast precision step
-RADAR_WARNING_DIST = 100
+# Radar Settings
+RADAR_ANGLES = [180, -135, -90, -45, -20, 0, 20, 45, 90, 135]
+RADAR_COUNT = len(RADAR_ANGLES)         # Number of sensors
+RADAR_MAX_DIST = 800    # Pixels
+RADAR_STEP = 32          # Raycast precision step
+RADAR_WARNING_DIST = 80
 RADAR_DANGER_DIST = 50
 
 # Visualization Settings
@@ -51,10 +53,11 @@ DRAW_RADARS = True
 RADAR_VIEW_ONLY = False
 FLASHLIGHT_MODE = False
 FLASHLIGHT_RADIUS = 300
+REALISTIC_VISION = True
 
 # Model Settings
 MODEL_PLAYING = False
 # MODEL_PLAYING = True
-# MODEL_PATH = "../car_racing_ml/model.h5"
-MODEL_PATH = "../car_racing_ml/transferred.h5"
+MODEL_PATH = "../car_racing_ml/model.h5"
+# MODEL_PATH = "../car_racing_ml/transferred.h5"
 DATA_PATH = "../car_racing_ml/data.csv"

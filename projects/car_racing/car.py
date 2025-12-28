@@ -19,6 +19,7 @@ class Car(pygame.sprite.Sprite):
         self.pos = pygame.math.Vector2(start_pos)
         self.velocity = pygame.math.Vector2(0, 0)
         self.angle = 0
+        self.prev_angle = 0 # Initialize prev_angle
         self.speed = 0
         
         self.mask = pygame.mask.from_surface(self.image)
@@ -52,40 +53,69 @@ class Car(pygame.sprite.Sprite):
             for i in range(RADAR_COUNT):
                 radar_angles.append(i * step_angle)
         
+    def cast_ray(self, angle, track_mask, max_dist=RADAR_MAX_DIST):
+        rad = math.radians(angle)
+        dir_vec = pygame.math.Vector2(-math.sin(rad), -math.cos(rad))
+        start_pos = pygame.math.Vector2(self.rect.center)
+        current_pos = start_pos.copy()
+        
+        dist = 0
+        step = RADAR_STEP
+        
+        # Optimization: Check boundaries first? No, mask is global.
+        
+        while dist < max_dist:
+            current_pos += dir_vec * step
+            dist += step
+            
+            int_x, int_y = int(current_pos.x), int(current_pos.y)
+            
+            # Bounds check
+            if 0 <= int_x < track_mask.get_size()[0] and 0 <= int_y < track_mask.get_size()[1]:
+                if track_mask.get_at((int_x, int_y)):
+                    # Hit logic
+                    current_pos -= dir_vec * step
+                    dist -= step
+                    step = 1 # Fine step
+                    while dist < max_dist:
+                        current_pos += dir_vec * step
+                        dist += step
+                        int_x, int_y = int(current_pos.x), int(current_pos.y)
+                        if track_mask.get_at((int_x, int_y)):
+                            break
+                        if step == 1 and dist > max_dist: break 
+                    break
+            else:
+                break
+                
+        return current_pos, dist
+
+    def update_sensors(self, track_mask):
+        self.radars.clear()
+        if not track_mask: return
+            
+        radar_angles = RADAR_ANGLES
+        
         for angle_offset in radar_angles:
             check_angle = self.angle + angle_offset
-            rad = math.radians(check_angle)
-            
-            dir_vec = pygame.math.Vector2(-math.sin(rad), -math.cos(rad))
+            # Ensure safe access to rect center (though it should be set)
             start_pos = pygame.math.Vector2(self.rect.center)
-            current_pos = start_pos.copy()
+            end_pos, dist = self.cast_ray(check_angle, track_mask)
+            self.radars.append((start_pos, end_pos, dist))
             
-            dist = 0
-            step = RADAR_STEP
+    def get_vision_polygon(self, track_mask):
+        if not track_mask: return []
+        
+        points = []
+        # Cast rays in circle
+        # Resolution: 3 degrees = 120 points. Good for performance/quality balance.
+        resolution = 4 
+        for angle in range(0, 360, resolution):
+            # Absolute angle? Yes.
+            end_pos, _ = self.cast_ray(angle, track_mask, max_dist=1000) # Further vision than radar
+            points.append(end_pos)
             
-            while dist < RADAR_MAX_DIST:
-                current_pos += dir_vec * step
-                dist += step
-                
-                int_x, int_y = int(current_pos.x), int(current_pos.y)
-                
-                if 0 <= int_x < track_mask.get_size()[0] and 0 <= int_y < track_mask.get_size()[1]:
-                    if track_mask.get_at((int_x, int_y)):
-                        current_pos -= dir_vec * step
-                        dist -= step
-                        step = 1 # Fine step
-                        while dist < RADAR_MAX_DIST:
-                            current_pos += dir_vec * step
-                            dist += step
-                            int_x, int_y = int(current_pos.x), int(current_pos.y)
-                            if track_mask.get_at((int_x, int_y)):
-                                break
-                            if step == 1 and dist > RADAR_MAX_DIST: break # safety
-                        break
-                else:
-                    break
-            
-            self.radars.append((start_pos, current_pos, dist))
+        return points
 
     def input(self, controls=None):
         self.target_turning = 0
@@ -114,6 +144,7 @@ class Car(pygame.sprite.Sprite):
 
     def move(self, dt):
         self.prev_pos = self.pos.copy()
+        self.prev_angle = self.angle
         
         # Smooth steering
         # Lerp factor: Adjust for responsiveness. 
@@ -201,8 +232,11 @@ class Car(pygame.sprite.Sprite):
             if track_mask.overlap(self.mask, offset):
                 self.collided = True
                 
-                # Robust collision: revert position
+                # Robust collision: revert position AND angle
                 self.pos = self.prev_pos.copy()
+                self.angle = self.prev_angle
+                self.rotate() # Update rect/mask to match reverted state
+                
                 self.rect.center = (round(self.pos.x), round(self.pos.y))
                 
                 # Kill velocity (or bounce slightly)
