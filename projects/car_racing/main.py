@@ -57,7 +57,7 @@ class Game:
                 print("Loading Data for Scaler...")
                 
                 df = pd.read_csv(DATA_PATH)
-                x_train_source = df.drop(columns=["W", "A", "S", "D"], axis=1)
+                x_train_source = df.drop(columns=["W", "A", "S", "D", "Handbrake"], axis=1)
                 
                 self.feature_columns = x_train_source.columns.tolist()
 

@@ -8,10 +8,10 @@ from keras.src.models.sequential import Sequential
 import pandas as pd
 import numpy as np
 import tensorflow as tf
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 
 frame = pd.read_csv("data.csv")
-scaler = StandardScaler()
+scaler = MinMaxScaler()
 
 # Preprocessing
 x = frame.drop(columns=["W", "A", "S", "D", "Handbrake"], axis=1)
@@ -20,7 +20,7 @@ y = frame[["W", "A", "S", "D", "Handbrake"]]
 x = scaler.fit_transform(x)
 
 # Split data
-x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.05, random_state=42)
+x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.01, random_state=42)
 
 y_train_combined = y_train.astype(str).apply(lambda x: ''.join(x), axis=1)
 

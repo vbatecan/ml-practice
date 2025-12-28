@@ -60,7 +60,7 @@ REALISTIC_VISION = True
 # Model Settings
 # MODEL_PLAYING = False
 MODEL_PLAYING = True
-MODEL_PATH = "../car_racing_ml/model.h5"
-# MODEL_PATH = "../car_racing_ml/transferred.h5"
+# MODEL_PATH = "../car_racing_ml/model.h5"
+MODEL_PATH = "../car_racing_ml/transferred.h5"
 DATA_PATH = "../car_racing_ml/data.csv"
 AI_FLOAT_CONTROL = True
