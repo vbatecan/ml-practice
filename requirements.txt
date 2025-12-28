@@ -12,3 +12,4 @@ python-dotenv
 xgboost
 openpyxl
 imblearn
+tensorflow[and-cuda]

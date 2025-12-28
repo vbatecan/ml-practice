@@ -11,6 +11,7 @@ import tensorflow as tf
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
+from utils import get_closest_point_on_path, calculate_cross_track_error, calculate_heading_error
 
 class Game:
     def __init__(self):
@@ -32,8 +33,12 @@ class Game:
         self.model = None
         self.scaler = None
         
-        self.current_controls = (0, 0, 0, 0) # w, a, s, d
+        self.current_controls = (0, 0, 0, 0, 0) # w, a, s, d, handbrake
         self.steering_ema = 0.0 # Smoothed steering value (-1 to 1)
+
+        # New Telemetry Vars
+        self.cte = 0.0
+        self.heading_error = 0.0
 
         # Flashlight Surface
         if FLASHLIGHT_MODE:
@@ -61,7 +66,7 @@ class Game:
                 print("Scaler fitted.")
                 
                 # Pre-calculate fallback radar data
-                self.fallback_radar_data = [0, 1, 1] * RADAR_COUNT
+                self.fallback_radar_data = [0] * RADAR_COUNT
                 
             except Exception as e:
                 print(f"Failed to load model or scaler: {e}")
@@ -126,14 +131,10 @@ class Game:
                 writer = csv.writer(f)
                 
                 # Create Header
-                # W, A, S, D, Acceleration, R1, R2, ..., Rn
-                # Create Header
-                # W, A, S, D, Speed, SteerAngle, Collision, Acceleration, R0, R1, ..., Rn
-                header = ["W", "A", "S", "D", "Speed", "SteeringAngle", "Collision", "Acceleration"]
+                # W, A, S, D, Handbrake, Speed, SteerAngle, Collision, Acceleration, CTE, HeadingError, R0, R1, ..., Rn
+                header = ["W", "A", "S", "D", "Handbrake", "Speed", "SteeringAngle", "Collision", "Acceleration", "CTE", "HeadingError"]
                 for i in range(RADAR_COUNT):
                     header.append(f"R{i}")
-                    header.append(f"R{i}_Warn")
-                    header.append(f"R{i}_Dang")
                 
                 writer.writerow(header)
                 writer.writerows(self.telemetry_data)
@@ -144,33 +145,43 @@ class Game:
 
     def record_telemetry(self):
         # Use current applied controls (whether manual or model)
-        w, a, s, d = self.current_controls
-        
+        if len(self.current_controls) == 5:
+            w, a, s, d, hb = self.current_controls
+        else:
+            w, a, s, d = self.current_controls
+            hb = 0
+            
         speed = round(self.car.speed, 2)
         angle = round(self.car.angle, 2)
         collided = 1 if self.car.collided else 0
         accel = round(self.car.instant_acceleration, 2)
+        
+        # Calculate CTE and Heading (re-calculate or use stored)
+        # We calculate it here for recording to accuracy
+        closest_idx, dist = get_closest_point_on_path(self.car.pos, self.track.path)
+        cte = calculate_cross_track_error(self.car.pos, self.track.path, closest_idx)
+        heading_err = calculate_heading_error(self.car.angle, self.car.pos, self.track.path, closest_idx, lookahead=15)
+        
+        self.cte = cte
+        self.heading_error = heading_err
+        
+        # Normalize/Round for CSV
+        cte = round(cte, 2)
+        heading_err = round(heading_err, 2)
         
         radars = []
         if len(self.car.radars) == RADAR_COUNT:
             for r in self.car.radars:
                 dist = int(r[2])
                 radars.append(dist)
-                
-                # Add Warning and Danger flags
-                warn = 1 if dist < RADAR_WARNING_DIST else 0
-                dang = 1 if dist < RADAR_DANGER_DIST else 0
-                radars.append(warn)
-                radars.append(dang)
         else:
             # Fallback if radars not ready
             # Assuming 0 distance (collision/error) -> High danger
             for _ in range(RADAR_COUNT):
                 radars.append(0) # Distance
-                radars.append(1) # Warn
-                radars.append(1) # Dang
             
-        row = [w, a, s, d, speed, angle, collided, accel] + radars
+            
+        row = [w, a, s, d, hb, speed, angle, collided, accel, cte, heading_err] + radars
         
         # De-duplication: Only save if changed (ignore first row for simplicity or check)
         if self.telemetry_data:
@@ -190,16 +201,26 @@ class Game:
             collided = 1 if self.car.collided else 0
             accel = self.car.instant_acceleration
             
+            # Calculate CTE and Heading for Model
+            closest_idx, _ = get_closest_point_on_path(self.car.pos, self.track.path)
+            cte = calculate_cross_track_error(self.car.pos, self.track.path, closest_idx)
+            heading_err = calculate_heading_error(self.car.angle, self.car.pos, self.track.path, closest_idx, lookahead=15)
+            
+            self.cte = cte
+            self.heading_error = heading_err
+
             radars = []
             if len(self.car.radars) == RADAR_COUNT:
                 for r in self.car.radars:
                     dist = r[2]
-                    # Append dist, warn, dang
-                    radars.extend([dist, 1 if dist < RADAR_WARNING_DIST else 0, 1 if dist < RADAR_DANGER_DIST else 0])
+                    # Append dist
+                    radars.append(dist)
             else:
                 radars = self.fallback_radar_data
                 
-            input_data = [speed, angle, collided, accel] + radars
+            # Input structure must match training data:
+            # Speed, SteeringAngle, Collision, Acceleration, CTE, HeadingError, Radars...
+            input_data = [speed, angle, collided, accel, cte, heading_err] + radars
             
             # Create DataFrame with proper column names to avoid warnings
             input_df = pd.DataFrame([input_data], columns=self.feature_columns)
@@ -228,11 +249,36 @@ class Game:
             a = 1 if raw_a > 0.5 else 0
             d = 1 if raw_d > 0.5 else 0
             
-            # Auto-push logic (keep it)
+            # Input Interpretation
+            if AI_FLOAT_CONTROL:
+                # Use raw probability/strength (0.0 to 1.0)
+                w = float(pred[0])
+                a = float(pred[1])
+                s = float(pred[2])
+                d = float(pred[3])
+                
+                # Check for Handbrake (optional 5th output)
+                hb = 0.0
+                if len(pred) > 4:
+                    hb = float(pred[4])
+                
+            else:
+                # Binary Thresholding
+                w = 1 if pred[0] > 0.5 else 0
+                s = 1 if pred[2] > 0.5 else 0
+                a = 1 if pred[1] > 0.5 else 0
+                d = 1 if pred[3] > 0.5 else 0
+                
+                hb = 0
+                if len(pred) > 4:
+                     hb = 1 if pred[4] > 0.5 else 0
+            
+            # Auto-push logic (keep it for now to prevent getting stuck at start)
             if speed < 50:
-                w = 1
+                w = 1.0
+                hb = 0 # Don't handbrake if trying to auto-push
 
-            controls = (w, a, s, d)
+            controls = (w, a, s, d, hb)
             
         # Capture manual controls if model isn't playing
         if controls is None:
@@ -241,20 +287,21 @@ class Game:
             a = 1 if keys[pygame.K_a] else 0
             s = 1 if keys[pygame.K_s] else 0
             d = 1 if keys[pygame.K_d] else 0
-            controls = (w, a, s, d)
+            hb = 1 if keys[pygame.K_SPACE] else 0
+            
+            # Mutual Exclusion for Manual Input
+            if w and s:
+                w = 0
+                s = 0
+            if a and d:
+                a = 0
+                d = 0
+            
+            controls = (w, a, s, d, hb)
             
         self.current_controls = controls
 
         self.car.update(self.dt, self.track.mask, controls)
-        # Record what actually happened (if manual, keys; if model, model's choice?)
-        # record_telemetry reads keys directly. We should probably update it to record the 'controls' variable.
-        # But for now, if model is playing, keys are 0, so record_telemetry might record 0s unless we mock keys.
-        # Let's just update car first.
-        
-        # If model playing, record_telemetry will record 0s because it reads pygame.key. 
-        # But maybe that's fine, or we want to debug.
-        # Let's leave record_telemetry as is for now.
-        # Record telemetry for both manual and model driving
         self.record_telemetry()
         
         # Stats
@@ -363,7 +410,15 @@ class Game:
         # Acceleration Check
         accel_val = int(self.car.instant_acceleration)
         accel_surf = self.font.render(f"Accel: {accel_val}", True, WHITE)
+        accel_surf = self.font.render(f"Accel: {accel_val}", True, WHITE)
         self.screen.blit(accel_surf, (20, 50))
+        
+        # Track Info
+        cte_surf = self.font.render(f"CTE: {int(self.cte)}", True, WHITE)
+        self.screen.blit(cte_surf, (150, 20))
+        
+        head_surf = self.font.render(f"Head: {int(self.heading_error)}", True, WHITE)
+        self.screen.blit(head_surf, (150, 50))
         
         # Controls info
         controls_surf = self.font.render("AI Inputs:", True, GREY)
@@ -372,11 +427,18 @@ class Game:
         # Draw WASD Visualization
         # Layout:   W
         #         A S D
+        #           ^ (Space/HB)
         base_x, base_y = 150, 80
         size = 20
         gap = 5
         
-        cw, ca, cs, cd = self.current_controls
+        # Handle 5th element safely
+        if len(self.current_controls) == 5:
+            cw, ca, cs, cd, chb = self.current_controls
+        else:
+             cw, ca, cs, cd = self.current_controls
+             chb = 0
+
         
         keys = [
             ("W", float(cw), (base_x + size + gap, base_y)),
@@ -385,6 +447,7 @@ class Game:
             ("D", float(cd), (base_x + (size + gap)*2, base_y + size + gap))
         ]
         
+        # Draw WASD
         for k_char, active, (kx, ky) in keys:
             color = GREEN if active > 0.1 else DARK_GREY
             pygame.draw.rect(self.screen, color, (kx, ky, size, size), border_radius=3)
@@ -392,6 +455,18 @@ class Game:
             kt = self.font.render(k_char, True, BLACK if active > 0.1 else WHITE)
             kt_rect = kt.get_rect(center=(kx + size//2, ky + size//2))
             self.screen.blit(kt, kt_rect)
+            
+        # Draw Handbrake (Space) - Wide bar below
+        hb_active = float(chb)
+        hb_color = RED if hb_active > 0.1 else DARK_GREY
+        hb_x = base_x
+        hb_y = base_y + (size + gap) * 2
+        hb_w = (size + gap) * 3 - gap # Span across A S D
+        
+        pygame.draw.rect(self.screen, hb_color, (hb_x, hb_y, hb_w, size), border_radius=3)
+        hb_text = self.font.render("Space", True, BLACK if hb_active > 0.1 else WHITE)
+        hb_rect = hb_text.get_rect(center=(hb_x + hb_w//2, hb_y + size//2))
+        self.screen.blit(hb_text, hb_rect)
 
         
         # Odometer & Collisions

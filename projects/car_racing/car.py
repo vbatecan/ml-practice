@@ -28,6 +28,7 @@ class Car(pygame.sprite.Sprite):
         self.turning = 0.0 # Actual smoothed turning value
         self.target_turning = 0.0 # Input target
         self.accelerating = 0 
+        self.handbrake = 0 # 0 or 1
         
         # Sensor/Radar
         self.radars = []
@@ -120,15 +121,24 @@ class Car(pygame.sprite.Sprite):
     def input(self, controls=None):
         self.target_turning = 0
         self.accelerating = 0
+        self.handbrake = 0
         
         if controls:
-            w, a, s, d = controls
+            # Handle variable length controls
+            if len(controls) == 5:
+                w, a, s, d, hb = controls
+                self.handbrake = 1 if (hb > 0.5) else 0
+            else:
+                w, a, s, d = controls
+                self.handbrake = 0
+                
             # Analog steering
             if a or d:
                 self.target_turning = float(a) - float(d)
                 
-            if w: self.accelerating = 1
-            if s: self.accelerating = -1
+            # Float input support:
+            # If w/s are passed as 0-1 floats
+            self.accelerating = float(w) - float(s)
             return
 
         keys = pygame.key.get_pressed()
@@ -141,6 +151,9 @@ class Car(pygame.sprite.Sprite):
             self.accelerating = 1
         if keys[pygame.K_s]:
             self.accelerating = -1
+            
+        if keys[pygame.K_SPACE]:
+            self.handbrake = 1
 
     def move(self, dt):
         self.prev_pos = self.pos.copy()
@@ -166,8 +179,17 @@ class Car(pygame.sprite.Sprite):
         rad = math.radians(self.angle)
         heading = pygame.math.Vector2(-math.sin(rad), -math.cos(rad))
         
+        # Physics Modifiers
+        drift_factor = DRIFT_FACTOR
+        friction_val = FRICTION
+        
+        if self.handbrake:
+            drift_factor = HANDBRAKE_DRIFT_FACTOR
+            friction_val = HANDBRAKE_FRICTION
+            self.accelerating = 0 # Cut throttle/brakes from engine
+        
         # 3. Acceleration
-        if self.accelerating == 1:
+        if self.accelerating > 0:
             # Acceleration dampening ONLY when close to MAX_SPEED
             # This allows full acceleration for most of the range (0-70%)
             accel_factor = 1.0
@@ -175,22 +197,25 @@ class Car(pygame.sprite.Sprite):
                 percent_over = (self.speed - (MAX_SPEED * 0.7)) / (MAX_SPEED * 0.3)
                 accel_factor = 1.0 - percent_over
                 accel_factor = max(0.1, accel_factor) # Minimum 10%
-                
-            self.velocity += heading * ACCELERATION * accel_factor * dt
-        elif self.accelerating == -1:
+            
+            throttle = self.accelerating
+            self.velocity += heading * ACCELERATION * accel_factor * throttle * dt
+            
+        elif self.accelerating < 0:
+            brake_val = abs(self.accelerating)
             dot = self.velocity.dot(heading)
             if dot > 10: 
-                self.velocity -= heading * BRAKE_STRENGTH * dt
+                self.velocity -= heading * BRAKE_STRENGTH * brake_val * dt
             else: 
-                self.velocity -= heading * ACCELERATION * dt 
+                self.velocity -= heading * ACCELERATION * brake_val * dt 
 
         # 4. Drag and Friction
         if self.velocity.length() > 0:
             speed_val = self.velocity.length()
             drag_force = -self.velocity.normalize() * (DRAG * speed_val * speed_val)
-            friction_force = -self.velocity.normalize() * FRICTION
+            friction_force = -self.velocity.normalize() * friction_val
             
-            if speed_val < FRICTION * dt:
+            if speed_val < friction_val * dt:
                 self.velocity = pygame.math.Vector2(0, 0)
             else:
                 self.velocity += (drag_force + friction_force) * dt
@@ -199,7 +224,7 @@ class Car(pygame.sprite.Sprite):
         if self.velocity.length() > 0:
             forward_velocity = heading * (self.velocity.dot(heading))
             lateral_velocity = self.velocity - forward_velocity
-            self.velocity -= lateral_velocity * (DRIFT_FACTOR * dt)
+            self.velocity -= lateral_velocity * (drift_factor * dt)
 
         # 6. Update Position
         self.pos += self.velocity * dt
