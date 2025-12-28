@@ -17,9 +17,10 @@ class Car(pygame.sprite.Sprite):
         self.rect = self.image.get_rect(center=start_pos)
         
         self.pos = pygame.math.Vector2(start_pos)
+        self.prev_pos = self.pos.copy()
         self.velocity = pygame.math.Vector2(0, 0)
         self.angle = 0
-        self.prev_angle = 0 # Initialize prev_angle
+        self.prev_angle = 0
         self.speed = 0
         
         self.mask = pygame.mask.from_surface(self.image)
@@ -34,6 +35,8 @@ class Car(pygame.sprite.Sprite):
         self.radars = []
         self.last_speed = 0
         self.instant_acceleration = 0
+        self.current_throttle = 0.0
+        self.current_brake = 0.0
         
         self.collided = False
 
@@ -159,12 +162,8 @@ class Car(pygame.sprite.Sprite):
         self.prev_pos = self.pos.copy()
         self.prev_angle = self.angle
         
-        # Smooth steering
-        # Lerp factor: Adjust for responsiveness. 
-        # 5.0 * dt means it takes ~0.2s to reach target.
-        smoothing_speed = 5.0 
-        diff = self.target_turning - self.turning
-        self.turning += diff * min(smoothing_speed * dt, 1.0)
+        # Smooth steering (Lerp)
+        self.turning += (self.target_turning - self.turning) * min(STEERING_SMOOTHING * dt, 1.0)
         
         if abs(self.speed) > 0:
             # Scale turning by speed to avoid spinning in place
@@ -188,26 +187,40 @@ class Car(pygame.sprite.Sprite):
             friction_val = HANDBRAKE_FRICTION
             self.accelerating = 0 # Cut throttle/brakes from engine
         
-        # 3. Acceleration
-        if self.accelerating > 0:
+        # 3. Acceleration and Braking (Smoothed)
+        # Handle throttle and brake ramping
+        target_throttle = max(0, self.accelerating)
+        target_brake = max(0, -self.accelerating)
+        
+        # Throttle Ramp
+        if self.current_throttle < target_throttle:
+            self.current_throttle = min(self.current_throttle + THROTTLE_RAMP * dt, target_throttle)
+        else:
+            self.current_throttle = max(self.current_throttle - THROTTLE_RAMP * 2 * dt, target_throttle) # Release faster
+            
+        # Brake Ramp
+        if self.current_brake < target_brake:
+            self.current_brake = min(self.current_brake + BRAKE_RAMP * dt, target_brake)
+        else:
+            self.current_brake = max(self.current_brake - BRAKE_RAMP * 2 * dt, target_brake)
+
+        if self.current_throttle > 0:
             # Acceleration dampening ONLY when close to MAX_SPEED
-            # This allows full acceleration for most of the range (0-70%)
             accel_factor = 1.0
             if self.speed > MAX_SPEED * 0.7:
                 percent_over = (self.speed - (MAX_SPEED * 0.7)) / (MAX_SPEED * 0.3)
                 accel_factor = 1.0 - percent_over
-                accel_factor = max(0.1, accel_factor) # Minimum 10%
+                accel_factor = max(0.1, accel_factor)
             
-            throttle = self.accelerating
-            self.velocity += heading * ACCELERATION * accel_factor * throttle * dt
+            self.velocity += heading * ACCELERATION * accel_factor * self.current_throttle * dt
             
-        elif self.accelerating < 0:
-            brake_val = abs(self.accelerating)
+        if self.current_brake > 0:
             dot = self.velocity.dot(heading)
             if dot > 10: 
-                self.velocity -= heading * BRAKE_STRENGTH * brake_val * dt
+                self.velocity -= heading * BRAKE_STRENGTH * self.current_brake * dt
             else: 
-                self.velocity -= heading * ACCELERATION * brake_val * dt 
+                # Reverse logic
+                self.velocity -= heading * ACCELERATION * self.current_brake * dt 
 
         # 4. Drag and Friction
         if self.velocity.length() > 0:
@@ -224,7 +237,7 @@ class Car(pygame.sprite.Sprite):
         if self.velocity.length() > 0:
             forward_velocity = heading * (self.velocity.dot(heading))
             lateral_velocity = self.velocity - forward_velocity
-            self.velocity -= lateral_velocity * (drift_factor * dt)
+            self.velocity -= lateral_velocity * min(drift_factor * dt, 1.0)
 
         # 6. Update Position
         self.pos += self.velocity * dt

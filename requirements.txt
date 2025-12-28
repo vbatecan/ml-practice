@@ -3,7 +3,6 @@ pandas
 scikit-learn
 matplotlib
 # seaborn
-tensorflow
 # jupyter
 # ipykernel
 # opencv-python
@@ -13,3 +12,7 @@ xgboost
 openpyxl
 imblearn
 tensorflow[and-cuda]
+pygame
+gymnasium
+yfinance
+stable-baselines3

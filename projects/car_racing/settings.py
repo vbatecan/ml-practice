@@ -25,7 +25,12 @@ BRAKE_STRENGTH = 1200    # Pixels/sec^2
 FRICTION = 200           # Natural deceleration (rolling resistance)
 DRAG = 0.00100            # Air resistance factor (v^2)
 TURN_SPEED = 180         # Degrees/sec
-DRIFT_FACTOR = 24       # Higher = less drift (grip), Lower = more drift
+STEERING_SMOOTHING = 8.0  # Smoothness factor for steering (higher = more responsive/faster)
+THROTTLE_RAMP = 3.0       # How fast throttle builds up (0 to 1)
+BRAKE_RAMP = 5.0          # How fast brakes build up
+HUD_SPEED_FACTOR = 0.25   # Pixels/s to km/h
+HUD_ACCEL_FACTOR = 0.0694 # Pixels/s^2 to m/s^2 (Approx based on speed scaling)
+DRIFT_FACTOR = 8       # Higher = less drift (grip), Lower = more drift
 HANDBRAKE_FRICTION = 1000 # High friction when handbraking
 HANDBRAKE_DRIFT_FACTOR = 1.0 # Very slippery, high drift
 
@@ -34,8 +39,8 @@ TRACK_WIDTH = 200
 
 # Huge world settings
 NUM_POINTS = 30
-MIN_RADIUS = 1000
-MAX_RADIUS = 4000
+MIN_RADIUS = 2000
+MAX_RADIUS = 3000 
 SMOOTHING_ITERATIONS = 5
 
 # World bounds (just for reference, track determines actual size)
@@ -53,14 +58,27 @@ RADAR_DANGER_DIST = 50
 # Visualization Settings
 DRAW_RADARS = True
 RADAR_VIEW_ONLY = False
-FLASHLIGHT_MODE = False
+FLASHLIGHT_MODE = True
 FLASHLIGHT_RADIUS = 300
-REALISTIC_VISION = True
+REALISTIC_VISION = False
 
 # Model Settings
 # MODEL_PLAYING = False
 MODEL_PLAYING = True
-# MODEL_PATH = "../car_racing_ml/model.h5"
-MODEL_PATH = "../car_racing_ml/transferred.h5"
+MODEL_PATH = "../car_racing_ml/model_2.h5"
+# MODEL_PATH = "../car_racing_ml/transferred.h5"
 DATA_PATH = "../car_racing_ml/data.csv"
-AI_FLOAT_CONTROL = True
+AI_FLOAT_CONTROL = False
+
+# RL Environment Settings
+RL_HEADLESS = False          # Disable rendering during training for speed
+RL_MAX_STEPS = 2000          # Maximum steps per episode
+RL_FIXED_DT = 1/60           # Fixed timestep for simulation stability
+
+# RL Reward Tuning
+RL_REWARD_COLLISION = -200   # Collision penalty
+RL_REWARD_SPEED_FACTOR = 0.01     # Speed reward multiplier
+RL_REWARD_CTE_FACTOR = 0.05       # Cross-track error penalty multiplier
+RL_REWARD_HEADING_FACTOR = 0.1    # Heading error penalty multiplier
+RL_REWARD_PROGRESS_FACTOR = 0.5   # Progress reward multiplier
+RL_REWARD_LAP_BONUS = 100         # Bonus for completing a lap

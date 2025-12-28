@@ -8,6 +8,16 @@ import csv
 import datetime
 import os
 import tensorflow as tf
+# Suppress TF warnings and limit memory usage
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(e)
+
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
@@ -57,7 +67,7 @@ class Game:
                 print("Loading Data for Scaler...")
                 
                 df = pd.read_csv(DATA_PATH)
-                x_train_source = df.drop(columns=["W", "A", "S", "D", "Handbrake"], axis=1)
+                x_train_source = df.drop(columns=["W", "A", "S", "D", "Handbrake", "Collision"], axis=1)
                 
                 self.feature_columns = x_train_source.columns.tolist()
 
@@ -81,7 +91,7 @@ class Game:
             self.events()
             
             # Update
-            self.dt = self.clock.tick(FPS) / 1000.0
+            self.dt = min(self.clock.tick(FPS) / 1000.0, 0.1)
             self.update()
             
             # Draw
@@ -100,21 +110,31 @@ class Game:
                     self.running = False
 
     def reset_game(self):
-        self.track.reset()
-        self.car.pos = pygame.math.Vector2(self.track.start_position)
-        self.car.velocity = pygame.math.Vector2(0, 0)
-        self.car.speed = 0
-        self.car.angle = 0
-        self.car.last_speed = 0
-        self.car.instant_acceleration = 0
-
-        self.car.instant_acceleration = 0
-        self.car.radars.clear()
-        self.car.instant_acceleration = 0
-        self.car.radars.clear()
-        
-        self.total_distance = 0.0
-        self.collision_count = 0
+        try:
+            self.track.reset()
+            self.car.pos = pygame.math.Vector2(self.track.start_position)
+            self.car.prev_pos = self.car.pos.copy()
+            self.car.velocity = pygame.math.Vector2(0, 0)
+            self.car.speed = 0
+            self.car.angle = 0
+            self.car.last_speed = 0
+            self.car.instant_acceleration = 0
+            self.car.collided = False
+            self.car.turning = 0.0
+            self.car.target_turning = 0.0
+            self.car.current_throttle = 0.0
+            self.car.current_brake = 0.0
+            self.car.radars.clear()
+            
+            # Force update visual state and rect to new position
+            self.car.rect.center = (round(self.car.pos.x), round(self.car.pos.y))
+            self.car.rotate()
+            
+            self.total_distance = 0.0
+            self.collision_count = 0
+            print("Track reset successfully.")
+        except Exception as e:
+            print(f"Error resetting track: {e}")
 
 
     def save_telemetry(self):
@@ -124,7 +144,25 @@ class Game:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"racing_data_{timestamp}.csv"
         
-        print(f"Saving {len(self.telemetry_data)} rows to {filename}...")
+        # --- Data Cleaning (Collision Feature) ---
+        # "When Collision becomes 1, the driving that happened 2 seconds before that moment was bad driving."
+        # We calculate the window based on FPS (default 60).
+        lookback_frames = int(5 * FPS)
+        bad_indices = set()
+        
+        # Identify collision frames and mark the lookback window
+        # Collision flag is stored at index 7 of the row
+        for i, row in enumerate(self.telemetry_data):
+            if row[7] == 1:
+                start_range = max(0, i - lookback_frames)
+                for j in range(start_range, i + 1):
+                    bad_indices.add(j)
+        
+        cleaned_data = [row for i, row in enumerate(self.telemetry_data) if i not in bad_indices]
+        # ----------------------------------------
+        
+        print(f"Cleaning Data: Removed {len(bad_indices)} 'bad' frames (collisions + 2s lead-up).")
+        print(f"Saving {len(cleaned_data)} rows (from {len(self.telemetry_data)} total) to {filename}...")
         
         try:
             with open(filename, 'w', newline='') as f:
@@ -137,8 +175,8 @@ class Game:
                     header.append(f"R{i}")
                 
                 writer.writerow(header)
-                writer.writerows(self.telemetry_data)
-            print("Save completed.")
+                writer.writerows(cleaned_data)
+            print("Save completed successfully.")
             self.telemetry_data = [] # Clear data after saving
         except Exception as e:
             print(f"Error saving data: {e}")
@@ -219,8 +257,8 @@ class Game:
                 radars = self.fallback_radar_data
                 
             # Input structure must match training data:
-            # Speed, SteeringAngle, Collision, Acceleration, CTE, HeadingError, Radars...
-            input_data = [speed, angle, collided, accel, cte, heading_err] + radars
+            # Speed, SteeringAngle, Acceleration, CTE, HeadingError, Radars...
+            input_data = [speed, angle, accel, cte, heading_err] + radars
             
             # Create DataFrame with proper column names to avoid warnings
             input_df = pd.DataFrame([input_data], columns=self.feature_columns)
@@ -261,6 +299,24 @@ class Game:
                 hb = 0.0
                 if len(pred) > 4:
                     hb = float(pred[4])
+
+                # Mutual exclusion for AI W/S
+                if w > 0 and s > 0:
+                    if w >= s:
+                        w -= s
+                        s = 0.0
+                    else:
+                        s -= w
+                        w = 0.0
+                
+                # Mutual exclusion for AI A/D
+                if a > 0 and d > 0:
+                    if a >= d:
+                        a -= d
+                        d = 0.0
+                    else:
+                        d -= a
+                        a = 0.0
                 
             else:
                 # Binary Thresholding
@@ -272,10 +328,19 @@ class Game:
                 hb = 0
                 if len(pred) > 4:
                      hb = 1 if pred[4] > 0.5 else 0
+                
+                # Mutual Exclusion for Binary AI
+                if w and s:
+                    w = 0
+                    s = 0
+                if a and d:
+                    a = 0
+                    d = 0
             
             # Auto-push logic (keep it for now to prevent getting stuck at start)
             if speed < 50:
                 w = 1.0
+                s = 0.0
                 hb = 0 # Don't handbrake if trying to auto-push
 
             controls = (w, a, s, d, hb)
@@ -366,6 +431,13 @@ class Game:
         if FLASHLIGHT_MODE:
             self.screen.blit(self.flashlight_surf, (0, 0))
             
+        # Collision Visual Effect
+        if self.car.collided:
+            collision_overlay = pygame.Surface((WIDTH, HEIGHT))
+            collision_overlay.fill((255, 0, 0))
+            collision_overlay.set_alpha(100) # Semi-transparent red flash
+            self.screen.blit(collision_overlay, (0, 0))
+            
         if REALISTIC_VISION:
             # 1. Calculate polygon
             vision_poly = self.car.get_vision_polygon(self.track.mask)
@@ -401,16 +473,16 @@ class Game:
         self.screen.blit(hud_surf, (10, 10))
 
         # Speed
-        # Max Phys Speed = 800. Let's call that 200 km/h. Factor = 0.25
-        display_speed = int(self.car.speed * 0.25)
+        # Max Phys Speed = 1000. HUD_SPEED_FACTOR = 0.25 (km/h)
+        display_speed = int(self.car.speed * HUD_SPEED_FACTOR)
         speed_color = GREEN if display_speed < 100 else (RED if display_speed > 160 else WHITE)
         speed_surf = self.font.render(f"Speed: {display_speed} km/h", True, speed_color)
         self.screen.blit(speed_surf, (20, 20))
 
-        # Acceleration Check
-        accel_val = int(self.car.instant_acceleration)
-        accel_surf = self.font.render(f"Accel: {accel_val}", True, WHITE)
-        accel_surf = self.font.render(f"Accel: {accel_val}", True, WHITE)
+        # Acceleration
+        # Values in m/s^2 using HUD_ACCEL_FACTOR
+        accel_val = round(self.car.instant_acceleration * HUD_ACCEL_FACTOR, 1)
+        accel_surf = self.font.render(f"Accel: {accel_val} m/s²", True, WHITE)
         self.screen.blit(accel_surf, (20, 50))
         
         # Track Info
@@ -479,7 +551,7 @@ class Game:
         # We can dynamically stringify them
         # If too many, maybe just show first few or compact
         font_height = 20
-        start_y = 135
+        start_y = 160
 
         
         if self.car.radars:
