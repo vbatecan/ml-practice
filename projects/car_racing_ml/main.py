@@ -9,22 +9,23 @@ from keras.src.models.sequential import Sequential
 import pandas as pd
 import numpy as np
 import tensorflow as tf
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import StandardScaler
 
 frame = pd.read_csv("data.csv")
-scaler = MinMaxScaler()
-USE_SMOTE = True
+scaler = StandardScaler()
+USE_SMOTE = False
 
 # Preprocessing
 x = frame.drop(columns=["W", "A", "S", "D", "Handbrake", "Collision"], axis=1)
 y = frame[["W", "A", "S", "D", "Handbrake"]]
 
-x = scaler.fit_transform(x)
-
 # Split data
 x_train, x_test, y_train, y_test = train_test_split(
     x, y, test_size=0.01, random_state=42
 )
+
+x_train = scaler.fit_transform(x_train)
+x_test = scaler.transform(x_test)
 
 if USE_SMOTE:
     y_train_combined = y_train.astype(str).apply(lambda x: "".join(x), axis=1)
@@ -62,15 +63,15 @@ model = Sequential(
         Dense(128, activation="relu"),
         BatchNormalization(),
         Dense(64, activation="relu"),
-        Dropout(0.2),
+        Dropout(0.3),
         Dense(32, activation="relu"),
-        Dropout(0.1),
+        Dropout(0.3),
         Dense(5, activation="sigmoid"),
     ]
 )
 
 model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
-model.fit(x_train, y_train, epochs=200, callbacks=[early_stop], validation_split=0.2)
+model.fit(x_train, y_train, epochs=100, callbacks=[early_stop], validation_split=0.2)
 model.save("model.h5")
 
 score = model.evaluate(x_test, y_test)

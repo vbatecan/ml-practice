@@ -15,7 +15,7 @@ DARK_GREY = (50, 50, 50)
 GRASS_GREEN = (30, 100, 30)
 
 # Car settings
-CAR_WIDTH = 22
+CAR_WIDTH = 15
 CAR_HEIGHT = 42
 
 # Physics Constants (Pixels per Second / Seconds)
@@ -35,10 +35,10 @@ HANDBRAKE_FRICTION = 1000 # High friction when handbraking
 HANDBRAKE_DRIFT_FACTOR = 1.0 # Very slippery, high drift
 
 # Track settings
-TRACK_WIDTH = 200
+TRACK_WIDTH = 150
 
 # Huge world settings
-NUM_POINTS = 30
+NUM_POINTS = 35
 MIN_RADIUS = 2000
 MAX_RADIUS = 3000 
 SMOOTHING_ITERATIONS = 5
@@ -47,26 +47,25 @@ SMOOTHING_ITERATIONS = 5
 WORLD_PADDING = 500
 
 # Radar Settings
-# Radar Settings
 RADAR_ANGLES = [180, -135, -90, -45, -20, 0, 20, 45, 90, 135]
 RADAR_COUNT = len(RADAR_ANGLES)         # Number of sensors
-RADAR_MAX_DIST = 800    # Pixels
-RADAR_STEP = 32          # Raycast precision step
+RADAR_MAX_DIST = 500    # Pixels
+RADAR_STEP = 16          # Raycast precision step
 RADAR_WARNING_DIST = 100
 RADAR_DANGER_DIST = 50
 
 # Visualization Settings
 DRAW_RADARS = True
 RADAR_VIEW_ONLY = False
-FLASHLIGHT_MODE = True
+FLASHLIGHT_MODE = False
 FLASHLIGHT_RADIUS = 300
-REALISTIC_VISION = False
+REALISTIC_VISION = True
 
 # Model Settings
 # MODEL_PLAYING = False
 MODEL_PLAYING = True
-MODEL_PATH = "../car_racing_ml/model_2.h5"
-# MODEL_PATH = "../car_racing_ml/transferred.h5"
+# MODEL_PATH = "../car_racing_ml/model_2.h5"
+MODEL_PATH = "../car_racing_ml/transferred.h5"
 DATA_PATH = "../car_racing_ml/data.csv"
 AI_FLOAT_CONTROL = False
 
