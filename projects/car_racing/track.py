@@ -62,6 +62,28 @@ class Track(pygame.sprite.Sprite):
                 for p in self.path:
                     pygame.draw.circle(self.image, color, (int(p[0]), int(p[1])), line_width // 2)
 
+            # Draw center line (dashed white)
+            dash_length = 20
+            gap_length = 30
+            for i in range(len(self.path)):
+                p1 = pygame.math.Vector2(self.path[i])
+                p2 = pygame.math.Vector2(self.path[(i + 1) % len(self.path)])
+                
+                segment_vec = p2 - p1
+                segment_dist = segment_vec.length()
+                if segment_dist == 0: continue
+                segment_dir = segment_vec.normalize()
+                
+                curr_dist = 0
+                while curr_dist < segment_dist:
+                    # Draw a dash
+                    start_p = p1 + segment_dir * curr_dist
+                    end_dist = min(curr_dist + dash_length, segment_dist)
+                    end_p = p1 + segment_dir * end_dist
+                    
+                    pygame.draw.line(self.image, WHITE, start_p, end_p, 3)
+                    curr_dist += dash_length + gap_length
+
         # 6. Start Position
         if self.path:
             self.start_position = self.path[0]

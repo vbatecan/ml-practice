@@ -64,7 +64,7 @@ model = load_model(MODEL)
 for layer in model.layers[:-1]:
     layer.trainable = False
 
-for layer in model.layers[-5:]:
+for layer in model.layers[-3:]:
     layer.trainable = True
 
 model.compile(
@@ -75,7 +75,7 @@ model.compile(
     metrics=["accuracy"],
 )
 
-model.fit(x_train, y_train, epochs=150, callbacks=[early_stop], validation_split=0.2, validation_data=[x_test, y_test])
+model.fit(x_train, y_train, epochs=10, callbacks=[early_stop], validation_split=0.2, validation_data=[x_test, y_test])
 model.save(SAVE_MODEL)
 
 score = model.evaluate(x_test, y_test)

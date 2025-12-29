@@ -67,6 +67,12 @@ class Game:
                 print("Loading Data for Scaler...")
                 
                 df = pd.read_csv(DATA_PATH)
+                
+                # Apply transformations to match training data
+                # We replace R with log1p(R)
+                for i in range(RADAR_COUNT):
+                    df[f"R{i}"] = np.log1p(df[f"R{i}"])
+                
                 x_train_source = df.drop(columns=["W", "A", "S", "D", "Handbrake", "Collision"], axis=1)
                 
                 self.feature_columns = x_train_source.columns.tolist()
@@ -77,6 +83,7 @@ class Game:
                 
                 # Pre-calculate fallback radar data
                 self.fallback_radar_data = [0] * RADAR_COUNT
+                self.prev_radars = [0] * RADAR_COUNT
                 
             except Exception as e:
                 print(f"Failed to load model or scaler: {e}")
@@ -145,23 +152,24 @@ class Game:
         filename = f"racing_data_{timestamp}.csv"
         
         # --- Data Cleaning (Collision Feature) ---
-        # "When Collision becomes 1, the driving that happened 2 seconds before that moment was bad driving."
-        # We calculate the window based on FPS (default 60).
-        lookback_frames = int(5 * FPS)
-        bad_indices = set()
-        
-        # Identify collision frames and mark the lookback window
-        # Collision flag is stored at index 7 of the row
-        for i, row in enumerate(self.telemetry_data):
-            if row[7] == 1:
-                start_range = max(0, i - lookback_frames)
-                for j in range(start_range, i + 1):
-                    bad_indices.add(j)
-        
-        cleaned_data = [row for i, row in enumerate(self.telemetry_data) if i not in bad_indices]
+        if TELEMETRY_CLEANUP_ENABLED:
+            lookback_frames = int(TELEMETRY_LOOKBACK_SECONDS * FPS)
+            bad_indices = set()
+            
+            # Identify collision frames and mark the lookback window
+            for i, row in enumerate(self.telemetry_data):
+                if row[7] == 1:
+                    start_range = max(0, i - lookback_frames)
+                    for j in range(start_range, i + 1):
+                        bad_indices.add(j)
+            
+            cleaned_data = [row for i, row in enumerate(self.telemetry_data) if i not in bad_indices]
+            print(f"Cleaning Data: Removed {len(bad_indices)} 'bad' frames (collisions + {TELEMETRY_LOOKBACK_SECONDS}s lead-up).")
+        else:
+            cleaned_data = self.telemetry_data
+            print("Cleaning Data: Disabled.")
         # ----------------------------------------
         
-        print(f"Cleaning Data: Removed {len(bad_indices)} 'bad' frames (collisions + 2s lead-up).")
         print(f"Saving {len(cleaned_data)} rows (from {len(self.telemetry_data)} total) to {filename}...")
         
         try:
@@ -248,17 +256,22 @@ class Game:
             self.heading_error = heading_err
 
             radars = []
+            radars_log = []
+
             if len(self.car.radars) == RADAR_COUNT:
-                for r in self.car.radars:
+                for i, r in enumerate(self.car.radars):
                     dist = r[2]
-                    # Append dist
                     radars.append(dist)
+                    radars_log.append(np.log1p(dist))
+                
+                self.prev_radars = list(radars)
             else:
                 radars = self.fallback_radar_data
+                radars_log = [np.log1p(r) for r in radars]
                 
-            # Input structure must match training data:
-            # Speed, SteeringAngle, Acceleration, CTE, HeadingError, Radars...
-            input_data = [speed, angle, accel, cte, heading_err] + radars
+            # Input structure must match training data (15 features):
+            # Speed, SteeringAngle, Acceleration, CTE, HeadingError, LogRadars (R0-R9)
+            input_data = [speed, angle, accel, cte, heading_err] + radars_log
             
             # Create DataFrame with proper column names to avoid warnings
             input_df = pd.DataFrame([input_data], columns=self.feature_columns)
