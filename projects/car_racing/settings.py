@@ -1,7 +1,7 @@
 # Screen settings
 WIDTH = 1280
 HEIGHT = 720
-FPS = 144
+FPS = 60
 TITLE = "Procedural Car Racing"
 
 # Colors
@@ -20,7 +20,7 @@ CAR_HEIGHT = 42
 
 # Physics Constants (Pixels per Second / Seconds)
 MAX_SPEED = 2000  # Pixels/sec
-ACCELERATION = 500  # Pixels/sec^2
+ACCELERATION = 700  # Pixels/sec^2
 BRAKE_STRENGTH = 1200  # Pixels/sec^2
 FRICTION = 200  # Natural deceleration (rolling resistance)
 DRAG = 0.00100  # Air resistance factor (v^2)
@@ -72,10 +72,10 @@ DATA_PATH = "../car_racing_ml/combined_data.csv"
 AI_FLOAT_CONTROL = False
 
 # RL Environment Settings
-RL_HEADLESS = False
+RL_HEADLESS = False  # Set to True for faster training, False to visualize
 RL_FIXED_DT = 1 / FPS
-REPLAY_MEMORY = 2000
-BATCH_SIZE = 32
+REPLAY_MEMORY = 50000  # Large replay buffer for experience diversity
+BATCH_SIZE = 64  # Larger batch for stable gradients
 
 
 # Telemetry Settings

@@ -64,6 +64,9 @@ class Game:
         # New Telemetry Vars
         self.cte = 0.0
         self.heading_error = 0.0
+        
+        # Training metrics (set by RL training loop)
+        self.training_metrics = None
 
         # Flashlight Surface
         if FLASHLIGHT_MODE and not RL_HEADLESS:
@@ -311,8 +314,16 @@ class Game:
             "total_distance": self.total_distance,
         }
 
-    def step(self, action):
-        """Advance the game by one frame with the given action."""
+    def step(self, action, training_metrics=None):
+        """Advance the game by one frame with the given action.
+        
+        Args:
+            action: Control tuple (w, a, s, d) or (w, a, s, d, hb)
+            training_metrics: Optional dict with training stats for UI display
+        """
+        # Store training metrics for HUD display
+        self.training_metrics = training_metrics
+        
         # action is typically (w, a, s, d, hb)
         self.current_controls = action
         self.dt = RL_FIXED_DT
@@ -590,6 +601,10 @@ class Game:
 
         # HUD (Static, no offset)
         self.draw_hud()
+        
+        # Training metrics overlay (if RL training)
+        if self.training_metrics:
+            self.draw_training_hud()
 
         if not RL_HEADLESS:
             pygame.display.flip()
@@ -708,6 +723,58 @@ class Game:
 
         regen_surf = self.font.render("R: New Track | Esc: Quit", True, GREY)
         self.screen.blit(regen_surf, (20, start_y + 5))
+    
+    def draw_training_hud(self):
+        """Draw RL training metrics overlay on top-right of screen."""
+        if not self.training_metrics:
+            return
+        
+        m = self.training_metrics
+        
+        # Panel dimensions
+        panel_w = 280
+        panel_h = 200
+        panel_x = WIDTH - panel_w - 10
+        panel_y = 10
+        
+        # Semi-transparent background
+        panel_surf = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        pygame.draw.rect(
+            panel_surf, (0, 50, 100, 180), panel_surf.get_rect(), border_radius=10
+        )
+        self.screen.blit(panel_surf, (panel_x, panel_y))
+        
+        # Title
+        title_font = pygame.font.SysFont("Arial", 20, bold=True)
+        title_surf = title_font.render("RL TRAINING", True, (100, 200, 255))
+        self.screen.blit(title_surf, (panel_x + 10, panel_y + 8))
+        
+        # Metrics
+        small_font = pygame.font.SysFont("Arial", 16)
+        y_offset = panel_y + 35
+        line_height = 22
+        
+        # Action names for display
+        action_names = ['Forward', 'Fwd+Left', 'Fwd+Right', 'Brake', 'Coast']
+        action_name = action_names[m.get('action', 0)] if m.get('action', 0) < len(action_names) else 'Unknown'
+        
+        metrics_lines = [
+            (f"Episode: {m.get('episode', 0)}", WHITE),
+            (f"Step: {m.get('step', 0)} / Total: {m.get('total_steps', 0)}", WHITE),
+            (f"Ep Reward: {m.get('episode_reward', 0):.1f}", 
+             GREEN if m.get('episode_reward', 0) > 0 else RED),
+            (f"Avg(100): {m.get('avg_reward_100', 0):.1f}", WHITE),
+            (f"Epsilon: {m.get('epsilon', 1.0):.3f}", 
+             (255, 200, 100) if m.get('epsilon', 1.0) > 0.5 else (100, 255, 100)),
+            (f"Loss: {m.get('loss', 0):.4f}", WHITE),
+            (f"Memory: {m.get('memory_size', 0)}", WHITE),
+            (f"Action: {action_name}", (200, 200, 255)),
+        ]
+        
+        for text, color in metrics_lines:
+            surf = small_font.render(text, True, color)
+            self.screen.blit(surf, (panel_x + 10, y_offset))
+            y_offset += line_height
 
 
 if __name__ == "__main__":
