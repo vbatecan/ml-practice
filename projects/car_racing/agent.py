@@ -6,8 +6,9 @@ import random
 from collections import deque
 
 import numpy as np
+import tensorflow as tf
 from keras.layers import Dense, Input
-from keras.models import Sequential, clone_model
+from keras.models import Sequential
 from keras.optimizers import Adam
 
 from settings import BATCH_SIZE, REPLAY_MEMORY
@@ -37,6 +38,8 @@ class DQNAgent:
         # Target network update frequency
         self.target_update_freq = 100  # Update target network every N training steps
         self.train_step_count = 0
+        self.train_frequency = 4  # Train every N steps - more frequent with larger batches
+        self.num_gradient_steps = 4  # More gradient updates per training call for GPU utilization
 
         # Replay Memory
         self.memory = deque(maxlen=REPLAY_MEMORY)
@@ -95,50 +98,59 @@ class DQNAgent:
         if state.ndim == 1:
             state = np.expand_dims(state, axis=0)
 
-        q_values = self.model.predict(state, verbose=0)
-        return np.argmax(q_values[0])
+        # Use direct model call instead of predict() - much faster!
+        state_tensor = tf.convert_to_tensor(state, dtype=tf.float32)
+        q_values = self.model(state_tensor, training=False)
+        return np.argmax(q_values[0].numpy())
 
     def replay(self):
-        """Train the model using experience replay (batch learning)."""
+        """Train the model using experience replay (batch learning).
+        
+        Performs multiple gradient updates for efficiency.
+        """
         if len(self.memory) < self.train_start:
             return 0.0  # Not enough samples
 
         if len(self.memory) < self.batch_size:
             return 0.0
 
-        # Sample minibatch
-        minibatch = random.sample(self.memory, self.batch_size)
-
-        # Prepare batch arrays
-        states = np.array([exp[0] for exp in minibatch])
-        actions = np.array([exp[1] for exp in minibatch])
-        rewards = np.array([exp[2] for exp in minibatch])
-        next_states = np.array([exp[3] for exp in minibatch])
-        dones = np.array([exp[4] for exp in minibatch])
-
-        # Current Q values
-        current_q = self.model.predict(states, verbose=0)
-
-        # Next Q values from TARGET network (Double DQN)
-        next_q_target = self.target_model.predict(next_states, verbose=0)
+        total_loss = 0.0
         
-        # Best actions from MAIN network (for Double DQN)
-        next_q_main = self.model.predict(next_states, verbose=0)
-        best_actions = np.argmax(next_q_main, axis=1)
+        # Multiple gradient steps for better GPU utilization
+        for _ in range(self.num_gradient_steps):
+            # Sample minibatch
+            minibatch = random.sample(self.memory, self.batch_size)
 
-        # Update Q values using Bellman equation
-        for i in range(self.batch_size):
-            if dones[i]:
-                current_q[i][actions[i]] = rewards[i]
-            else:
-                # Double DQN: Use main network to select action, target network for value
-                current_q[i][actions[i]] = rewards[i] + self.gamma * next_q_target[i][best_actions[i]]
+            # Prepare batch arrays (use float32 for GPU efficiency)
+            states = np.array([exp[0] for exp in minibatch], dtype=np.float32)
+            actions = np.array([exp[1] for exp in minibatch])
+            rewards = np.array([exp[2] for exp in minibatch], dtype=np.float32)
+            next_states = np.array([exp[3] for exp in minibatch], dtype=np.float32)
+            dones = np.array([exp[4] for exp in minibatch])
 
-        # Train the model
-        history = self.model.fit(states, current_q, batch_size=self.batch_size, 
-                                  epochs=1, verbose=0)
+            # Convert to tensors for faster computation
+            states_t = tf.convert_to_tensor(states)
+            next_states_t = tf.convert_to_tensor(next_states)
 
-        # Decay epsilon
+            # Batch predictions using direct model calls (faster than predict())
+            current_q = self.model(states_t, training=False).numpy()
+            next_q_target = self.target_model(next_states_t, training=False).numpy()
+            next_q_main = self.model(next_states_t, training=False).numpy()
+            best_actions = np.argmax(next_q_main, axis=1)
+
+            # Update Q values using Bellman equation (vectorized where possible)
+            for i in range(self.batch_size):
+                if dones[i]:
+                    current_q[i][actions[i]] = rewards[i]
+                else:
+                    current_q[i][actions[i]] = rewards[i] + self.gamma * next_q_target[i][best_actions[i]]
+
+            # Train the model
+            history = self.model.fit(states, current_q, batch_size=self.batch_size, 
+                                      epochs=1, verbose=0)
+            total_loss += history.history['loss'][0]
+
+        # Decay epsilon (once per replay call, not per gradient step)
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
 
@@ -147,7 +159,7 @@ class DQNAgent:
         if self.train_step_count % self.target_update_freq == 0:
             self.update_target_model()
 
-        return history.history['loss'][0]
+        return total_loss / self.num_gradient_steps
 
     def save(self, filepath):
         """Save model weights to file."""

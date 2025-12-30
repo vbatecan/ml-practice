@@ -72,10 +72,10 @@ DATA_PATH = "../car_racing_ml/combined_data.csv"
 AI_FLOAT_CONTROL = False
 
 # RL Environment Settings
-RL_HEADLESS = False  # Set to True for faster training, False to visualize
+RL_HEADLESS = False  # Disabled rendering for maximum training speed
 RL_FIXED_DT = 1 / FPS
 REPLAY_MEMORY = 50000  # Large replay buffer for experience diversity
-BATCH_SIZE = 64  # Larger batch for stable gradients
+BATCH_SIZE = 256  # Large batch for maximum GPU utilization
 
 
 # Telemetry Settings

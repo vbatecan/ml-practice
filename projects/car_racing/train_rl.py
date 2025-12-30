@@ -6,6 +6,7 @@ Implements proper DQN training loop with:
 - Episode logging
 - Model checkpointing
 """
+import json
 import os
 import time
 from datetime import datetime
@@ -226,8 +227,34 @@ def train():
     
     best_reward = float('-inf')
     total_steps = 0
+    start_episode = 1
     
-    print(f"\nStarting training for {num_episodes} episodes...")
+    # Check for resume flag
+    if len(sys.argv) > 1 and sys.argv[1] == "resume":
+        checkpoint_path = os.path.join(save_dir, "checkpoint.json")
+        model_path = os.path.join(save_dir, "latest_model.keras")
+        
+        if os.path.exists(model_path) and os.path.exists(checkpoint_path):
+            print("\n🔄 Resuming from checkpoint...")
+            agent.model = keras.models.load_model(model_path)
+            agent.update_target_model()
+            
+            with open(checkpoint_path, 'r') as f:
+                checkpoint = json.load(f)
+            
+            agent.epsilon = checkpoint.get('epsilon', agent.epsilon)
+            start_episode = checkpoint.get('episode', 1) + 1
+            best_reward = checkpoint.get('best_reward', float('-inf'))
+            total_steps = checkpoint.get('total_steps', 0)
+            
+            print(f"  Loaded model from: {model_path}")
+            print(f"  Resuming at episode: {start_episode}")
+            print(f"  Epsilon: {agent.epsilon:.4f}")
+            print(f"  Best reward so far: {best_reward:.2f}")
+        else:
+            print("⚠️  No checkpoint found, starting fresh...")
+    
+    print(f"\nStarting training for {num_episodes} episodes (from episode {start_episode})...")
     print(f"Max steps per episode: {max_steps_per_episode}")
     print("-" * 60)
     
@@ -235,7 +262,7 @@ def train():
     metrics = TrainingMetrics()
     log_interval = 100  # Print to terminal every N steps
     
-    for episode in range(1, num_episodes + 1):
+    for episode in range(start_episode, num_episodes + 1):
         # Reset environment
         state_dict = game.reset_game()
         state = preprocess_state(state_dict)
@@ -263,12 +290,13 @@ def train():
             # Store experience (preprocessed states!)
             agent.remember(state, action, reward, next_state, done)
             
-            # Train (experience replay)
-            loss = agent.replay()
-            
-            if loss > 0:
-                episode_loss += loss
-                loss_count += 1
+            # Train (experience replay) - only every N steps for performance
+            # This reduces GPU overhead while maintaining learning quality
+            if total_steps % agent.train_frequency == 0:
+                loss = agent.replay()
+                if loss > 0:
+                    episode_loss += loss
+                    loss_count += 1
             
             # Update state
             state = next_state
@@ -329,6 +357,17 @@ def train():
         if episode % save_interval == 0:
             agent.save_full_model(os.path.join(save_dir, f"model_ep{episode}.keras"))
             print(f"  → Checkpoint saved at episode {episode}")
+        
+        # Always save latest model and checkpoint for resume
+        agent.model.save(os.path.join(save_dir, "latest_model.keras"), overwrite=True)
+        checkpoint = {
+            'episode': episode,
+            'epsilon': agent.epsilon,
+            'best_reward': best_reward,
+            'total_steps': total_steps,
+        }
+        with open(os.path.join(save_dir, "checkpoint.json"), 'w') as f:
+            json.dump(checkpoint, f)
     
     # Final save
     agent.save_full_model(os.path.join(save_dir, "final_model.keras"))
@@ -401,12 +440,17 @@ def evaluate(model_path, num_episodes=10):
 
 if __name__ == "__main__":
     import sys
+
+    import keras
     
     if len(sys.argv) > 1 and sys.argv[1] == "eval":
         # Evaluation mode
         model_path = sys.argv[2] if len(sys.argv) > 2 else "save/rl_models/best_model.keras"
         num_eps = int(sys.argv[3]) if len(sys.argv) > 3 else 10
         evaluate(model_path, num_eps)
+    elif len(sys.argv) > 1 and sys.argv[1] == "resume":
+        # Resume training mode
+        train()
     else:
-        # Training mode
+        # Fresh training mode
         train()
