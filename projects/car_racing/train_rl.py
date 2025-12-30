@@ -5,6 +5,7 @@ Implements proper DQN training loop with:
 - Reward shaping
 - Episode logging
 - Model checkpointing
+- Training resume support
 """
 import json
 import os
@@ -16,6 +17,40 @@ import numpy as np
 from agent import DQNAgent
 from main import Game
 from settings import RADAR_COUNT, RL_HEADLESS
+
+# Checkpoint paths
+CHECKPOINT_DIR = "save/rl_models"
+CHECKPOINT_FILE = os.path.join(CHECKPOINT_DIR, "checkpoint.json")
+LATEST_MODEL_FILE = os.path.join(CHECKPOINT_DIR, "latest_model.keras")
+
+
+def save_checkpoint(episode, epsilon, best_reward, total_steps):
+    """Save training checkpoint to JSON file."""
+    checkpoint = {
+        "episode": episode,
+        "epsilon": epsilon,
+        "best_reward": best_reward,
+        "total_steps": total_steps
+    }
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    with open(CHECKPOINT_FILE, 'w') as f:
+        json.dump(checkpoint, f)
+
+
+def load_checkpoint():
+    """Load training checkpoint from JSON file.
+    
+    Returns:
+        dict with checkpoint data or None if no checkpoint exists
+    """
+    if os.path.exists(CHECKPOINT_FILE):
+        try:
+            with open(CHECKPOINT_FILE, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Warning: Could not load checkpoint: {e}")
+            return None
+    return None
 
 
 def preprocess_state(state_dict):
@@ -195,8 +230,12 @@ class TrainingLogger:
         return avg_reward
 
 
-def train():
-    """Main training loop."""
+def train(resume=False):
+    """Main training loop.
+    
+    Args:
+        resume: If True, attempt to resume from last checkpoint
+    """
     print("=" * 60)
     print("DQN Training for Car Racing")
     print("=" * 60)
@@ -222,46 +261,49 @@ def train():
     save_interval = 50  # Save model every N episodes
     
     # Create save directory
-    save_dir = "save/rl_models"
+    save_dir = CHECKPOINT_DIR
     os.makedirs(save_dir, exist_ok=True)
     
     best_reward = float('-inf')
     total_steps = 0
     start_episode = 1
     
-    # Check for resume flag
-    if len(sys.argv) > 1 and sys.argv[1] == "resume":
-        checkpoint_path = os.path.join(save_dir, "checkpoint.json")
-        model_path = os.path.join(save_dir, "latest_model.keras")
-        
-        if os.path.exists(model_path) and os.path.exists(checkpoint_path):
-            print("\n🔄 Resuming from checkpoint...")
-            agent.model = keras.models.load_model(model_path)
-            agent.update_target_model()
+    # Try to resume from checkpoint
+    if resume:
+        checkpoint = load_checkpoint()
+        if checkpoint and os.path.exists(LATEST_MODEL_FILE):
+            start_episode = checkpoint["episode"] + 1
+            agent.epsilon = checkpoint["epsilon"]
+            best_reward = checkpoint["best_reward"]
+            total_steps = checkpoint["total_steps"]
             
-            with open(checkpoint_path, 'r') as f:
-                checkpoint = json.load(f)
-            
-            agent.epsilon = checkpoint.get('epsilon', agent.epsilon)
-            start_episode = checkpoint.get('episode', 1) + 1
-            best_reward = checkpoint.get('best_reward', float('-inf'))
-            total_steps = checkpoint.get('total_steps', 0)
-            
-            print(f"  Loaded model from: {model_path}")
-            print(f"  Resuming at episode: {start_episode}")
-            print(f"  Epsilon: {agent.epsilon:.4f}")
-            print(f"  Best reward so far: {best_reward:.2f}")
+            # Load the model weights
+            try:
+                from keras.models import load_model
+                agent.model = load_model(LATEST_MODEL_FILE)
+                agent.update_target_model()
+                print(f"\n✓ Resumed from episode {start_episode - 1}")
+                print(f"  Epsilon: {agent.epsilon:.4f}")
+                print(f"  Best reward: {best_reward:.2f}")
+                print(f"  Total steps: {total_steps}")
+            except Exception as e:
+                print(f"Warning: Could not load model: {e}")
+                print("Starting fresh training...")
+                start_episode = 1
+                agent.epsilon = 1.0
+                best_reward = float('-inf')
+                total_steps = 0
         else:
-            print("⚠️  No checkpoint found, starting fresh...")
+            print("No checkpoint found. Starting fresh training...")
     
-    print(f"\nStarting training for {num_episodes} episodes (from episode {start_episode})...")
+    print(f"\nStarting training from episode {start_episode} to {num_episodes}...")
     print(f"Max steps per episode: {max_steps_per_episode}")
     print("-" * 60)
     
     # Live metrics tracking
     metrics = TrainingMetrics()
     log_interval = 100  # Print to terminal every N steps
-    
+
     for episode in range(start_episode, num_episodes + 1):
         # Reset environment
         state_dict = game.reset_game()
@@ -357,17 +399,6 @@ def train():
         if episode % save_interval == 0:
             agent.save_full_model(os.path.join(save_dir, f"model_ep{episode}.keras"))
             print(f"  → Checkpoint saved at episode {episode}")
-        
-        # Always save latest model and checkpoint for resume
-        agent.model.save(os.path.join(save_dir, "latest_model.keras"), overwrite=True)
-        checkpoint = {
-            'episode': episode,
-            'epsilon': agent.epsilon,
-            'best_reward': best_reward,
-            'total_steps': total_steps,
-        }
-        with open(os.path.join(save_dir, "checkpoint.json"), 'w') as f:
-            json.dump(checkpoint, f)
     
     # Final save
     agent.save_full_model(os.path.join(save_dir, "final_model.keras"))
@@ -440,17 +471,15 @@ def evaluate(model_path, num_episodes=10):
 
 if __name__ == "__main__":
     import sys
-
-    import keras
     
     if len(sys.argv) > 1 and sys.argv[1] == "eval":
-        # Evaluation mode
+        # Evaluation mode: python train_rl.py eval [model_path] [num_episodes]
         model_path = sys.argv[2] if len(sys.argv) > 2 else "save/rl_models/best_model.keras"
         num_eps = int(sys.argv[3]) if len(sys.argv) > 3 else 10
         evaluate(model_path, num_eps)
     elif len(sys.argv) > 1 and sys.argv[1] == "resume":
-        # Resume training mode
-        train()
+        # Resume mode: python train_rl.py resume
+        train(resume=True)
     else:
-        # Fresh training mode
-        train()
+        # Fresh training mode: python train_rl.py
+        train(resume=False)

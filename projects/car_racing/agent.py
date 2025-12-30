@@ -38,8 +38,8 @@ class DQNAgent:
         # Target network update frequency
         self.target_update_freq = 100  # Update target network every N training steps
         self.train_step_count = 0
-        self.train_frequency = 4  # Train every N steps - more frequent with larger batches
-        self.num_gradient_steps = 4  # More gradient updates per training call for GPU utilization
+        self.train_frequency = 4  # Train every N steps (set by training loop)
+        self.num_gradient_steps = 2  # Number of gradient updates per training call
 
         # Replay Memory
         self.memory = deque(maxlen=REPLAY_MEMORY)
@@ -53,7 +53,8 @@ class DQNAgent:
         """Build neural network for Q-value approximation."""
         model = Sequential([
             Input(shape=(self.state_size,)),
-            Dense(128, activation='relu'),
+            Dense(256, activation='relu'),
+            Dense(256, activation='relu'),
             Dense(128, activation='relu'),
             Dense(64, activation='relu'),
             Dense(self.action_size, activation='linear')
