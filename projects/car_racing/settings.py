@@ -37,7 +37,7 @@ HANDBRAKE_FRICTION = 1000  # High friction when handbraking
 HANDBRAKE_DRIFT_FACTOR = 1.0  # Very slippery, high drift
 
 # Track settings
-TRACK_WIDTH = 200
+TRACK_WIDTH = 225
 
 # Huge world settings
 NUM_POINTS = 35
@@ -76,7 +76,6 @@ RL_HEADLESS = False  # Set to True for faster training, False to visualize
 RL_FIXED_DT = 1 / FPS
 REPLAY_MEMORY = 50000  # Large replay buffer for experience diversity
 BATCH_SIZE = 256  # Larger batch for stable gradients
-
 
 # Telemetry Settings
 TELEMETRY_CLEANUP_ENABLED = False

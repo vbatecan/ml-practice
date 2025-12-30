@@ -38,8 +38,8 @@ class DQNAgent:
         # Target network update frequency
         self.target_update_freq = 100  # Update target network every N training steps
         self.train_step_count = 0
-        self.train_frequency = 4  # Train every N steps (set by training loop)
-        self.num_gradient_steps = 2  # Number of gradient updates per training call
+        self.train_frequency = 1  # Train every N steps (set by training loop)
+        self.num_gradient_steps = 1  # Number of gradient updates per training call
 
         # Replay Memory
         self.memory = deque(maxlen=REPLAY_MEMORY)
@@ -177,3 +177,26 @@ class DQNAgent:
         """Save complete model (architecture + weights)."""
         self.model.save(filepath)
         print(f"Full model saved to {filepath}")
+
+    def save_memory(self, filepath):
+        """Save replay memory to file using pickle."""
+        import pickle
+        with open(filepath, 'wb') as f:
+            pickle.dump(list(self.memory), f)
+        print(f"Replay memory saved ({len(self.memory)} experiences)")
+
+    def load_memory(self, filepath):
+        """Load replay memory from file."""
+        import os
+        import pickle
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, 'rb') as f:
+                    experiences = pickle.load(f)
+                self.memory = deque(experiences, maxlen=self.memory.maxlen)
+                print(f"Replay memory loaded ({len(self.memory)} experiences)")
+                return True
+            except Exception as e:
+                print(f"Warning: Could not load memory: {e}")
+                return False
+        return False
