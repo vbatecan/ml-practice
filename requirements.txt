@@ -5,8 +5,8 @@ matplotlib
 # seaborn
 # jupyter
 # ipykernel
-# opencv-python
-# imbalanced-learn
+opencv-python
+imbalanced-learn
 python-dotenv
 xgboost
 openpyxl

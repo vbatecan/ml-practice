@@ -1,6 +1,0 @@
-pygame
-numpy
-tensorflow
-pandas
-scikit-learn
-gymnasium
