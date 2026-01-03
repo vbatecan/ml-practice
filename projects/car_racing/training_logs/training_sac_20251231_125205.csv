@@ -1,0 +1,3 @@
+episode,steps,reward,avg_reward_100,alpha,critic_loss,actor_loss,duration
+1,1999,920.80,920.80,0.2485,90.674896,0.000000,160.07
+2,457,-259.32,330.74,0.2483,100.924848,0.000000,36.39

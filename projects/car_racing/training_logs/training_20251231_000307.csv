@@ -1,0 +1,2 @@
+episode,steps,reward,avg_reward_100,epsilon,loss,duration
+33,298,-47.81,-47.81,0.0719,0.478645,34.64

@@ -3,11 +3,11 @@ import datetime
 import math
 import os
 import sys
+import time as time_module
 
 import keras
 import pygame
 import tensorflow as tf
-
 from car import Car
 from settings import *
 from track import Track
@@ -25,9 +25,7 @@ if gpus:
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
-
-from utils import (calculate_cross_track_error, calculate_heading_error,
-                   get_closest_point_on_path)
+from utils import calculate_cross_track_error, get_closest_point_on_path
 
 
 class Game:
@@ -55,6 +53,20 @@ class Game:
         self.total_distance = 0.0
         self.collision_count = 0
 
+        # Lap System State
+        self.current_lap = 0  # 0 = hasn't crossed start yet, 1+ = laps completed
+        self.total_laps = TOTAL_LAPS
+        self.lap_start_time = None  # Timer for current lap
+        self.race_start_time = None  # Timer for entire race
+        self.last_lap_time = 0.0
+        self.best_lap_time = float('inf')
+        self.lap_times = []  # History of lap times
+        self.race_finished = False
+        self.lap_checkpoint_pos = None  # Lap line position (calculated in _setup_lap_checkpoint)
+        self.lap_checkpoint_index = 0  # Track path index for checkpoint
+        self.crossed_checkpoint = False  # Must cross checkpoint before lap counts
+        self.pending_lap_reward = 0.0  # Reward earned from lap completion
+
         self.model = None
         self.scaler = None
 
@@ -63,7 +75,6 @@ class Game:
 
         # New Telemetry Vars
         self.cte = 0.0
-        self.heading_error = 0.0
         
         # Training metrics (set by RL training loop)
         self.training_metrics = None
@@ -115,6 +126,110 @@ class Game:
                 print("Falling back to manual control.")
                 self.model = None
 
+        # Setup lap checkpoint after track is initialized
+        self._setup_lap_checkpoint()
+
+    def _setup_lap_checkpoint(self):
+        """Setup the lap checkpoint line on the opposite side of the track from spawn."""
+        if not self.track.path:
+            return
+        
+        # Find the checkpoint position (opposite side of track from start)
+        path_len = len(self.track.path)
+        self.lap_checkpoint_index = int(path_len * LAP_CHECKPOINT_INDEX)
+        self.lap_checkpoint_pos = pygame.math.Vector2(self.track.path[self.lap_checkpoint_index])
+        
+        # Calculate perpendicular direction for the lap line visualization
+        if path_len > 1:
+            idx = self.lap_checkpoint_index
+            p1 = pygame.math.Vector2(self.track.path[idx])
+            p2 = pygame.math.Vector2(self.track.path[(idx + 1) % path_len])
+            direction = (p2 - p1).normalize() if (p2 - p1).length() > 0 else pygame.math.Vector2(1, 0)
+            # Perpendicular
+            self.lap_line_perp = pygame.math.Vector2(-direction.y, direction.x)
+        else:
+            self.lap_line_perp = pygame.math.Vector2(1, 0)
+        
+        print(f"Lap checkpoint set at path index {self.lap_checkpoint_index} (pos: {self.lap_checkpoint_pos})")
+
+    def _check_lap_crossing(self):
+        """Check if car has crossed the checkpoint or start/finish line."""
+        if self.race_finished:
+            return 0.0  # No reward if race is done
+        
+        car_pos = self.car.pos
+        reward = 0.0
+        
+        # Check checkpoint crossing (opposite side of track)
+        if self.lap_checkpoint_pos and not self.crossed_checkpoint:
+            dist_to_checkpoint = (car_pos - self.lap_checkpoint_pos).length()
+            if dist_to_checkpoint < TRACK_WIDTH * 0.6:  # Within checkpoint zone
+                self.crossed_checkpoint = True
+                # Small reward for hitting checkpoint
+                reward += 20.0
+                print(f"Checkpoint crossed! Lap {self.current_lap}/{self.total_laps}")
+        
+        # Check start/finish line crossing (lap completion)
+        start_pos = pygame.math.Vector2(self.track.start_position)
+        dist_to_start = (car_pos - start_pos).length()
+        
+        if dist_to_start < TRACK_WIDTH * 0.6 and self.crossed_checkpoint:
+            # Calculate lap time
+            if self.lap_start_time is not None:
+                lap_time = time_module.time() - self.lap_start_time
+                self.last_lap_time = lap_time
+                self.lap_times.append(lap_time)
+                
+                if lap_time < self.best_lap_time:
+                    self.best_lap_time = lap_time
+                
+                # Calculate time-based reward
+                time_diff = EXPECTED_LAP_TIME - lap_time
+                if time_diff > 0:
+                    # Faster than expected - bonus!
+                    time_bonus = min(time_diff * (TIME_BONUS_MAX / EXPECTED_LAP_TIME), TIME_BONUS_MAX)
+                else:
+                    # Slower than expected - penalty (capped)
+                    time_bonus = max(time_diff * TIME_PENALTY_PER_SECOND, -50.0)
+                
+                # Base lap reward
+                lap_reward = LAP_BASE_REWARD + time_bonus
+                
+                print(f"Lap {self.current_lap + 1} completed! Time: {lap_time:.2f}s | Reward: {lap_reward:.1f}")
+            else:
+                lap_reward = LAP_BASE_REWARD
+                lap_time = 0
+            
+            # Complete the lap
+            self.current_lap += 1
+            self.crossed_checkpoint = False
+            self.lap_start_time = time_module.time()
+            
+            # Check if race finished
+            if self.current_lap >= self.total_laps:
+                self.race_finished = True
+                final_bonus = LAP_BASE_REWARD * LAP_FINAL_MULTIPLIER
+                lap_reward += final_bonus
+                total_race_time = time_module.time() - self.race_start_time if self.race_start_time else 0
+                print(f"🏁 RACE FINISHED! Total time: {total_race_time:.2f}s | Final bonus: {final_bonus:.1f}")
+            
+            reward += lap_reward
+            self.pending_lap_reward = reward
+        
+        return reward
+
+    def get_current_lap_time(self):
+        """Get the elapsed time for the current lap."""
+        if self.lap_start_time is None:
+            return 0.0
+        return time_module.time() - self.lap_start_time
+    
+    def get_total_race_time(self):
+        """Get the total elapsed race time."""
+        if self.race_start_time is None:
+            return 0.0
+        return time_module.time() - self.race_start_time
+
     def run(self):
         while self.running:
             # Event handling
@@ -146,7 +261,21 @@ class Game:
             self.car.prev_pos = self.car.pos.copy()
             self.car.velocity = pygame.math.Vector2(0, 0)
             self.car.speed = 0
-            self.car.angle = 0
+            self.car.speed = 0
+            
+            # Calculate initial angle based on track direction
+            if len(self.track.path) > 1:
+                p0 = pygame.math.Vector2(self.track.path[0])
+                p1 = pygame.math.Vector2(self.track.path[1])
+                diff = p1 - p0
+                if diff.length() > 0:
+                    rad = math.atan2(-diff.x, -diff.y)
+                    self.car.angle = math.degrees(rad)
+                else:
+                    self.car.angle = 0
+            else:
+                self.car.angle = 0
+
             self.car.last_speed = 0
             self.car.instant_acceleration = 0
             self.car.collided = False
@@ -162,6 +291,20 @@ class Game:
 
             self.total_distance = 0.0
             self.collision_count = 0
+
+            # Reset lap system state
+            self.current_lap = 0
+            self.lap_start_time = time_module.time()
+            self.race_start_time = time_module.time()
+            self.last_lap_time = 0.0
+            self.best_lap_time = float('inf')
+            self.lap_times = []
+            self.race_finished = False
+            self.crossed_checkpoint = False
+            self.pending_lap_reward = 0.0
+            
+            # Re-setup lap checkpoint for new track
+            self._setup_lap_checkpoint()
 
             # Update sensors immediately so the returned state is valid
             self.car.update_sensors(self.track.mask)
@@ -223,7 +366,6 @@ class Game:
                     "Collision",
                     "Acceleration",
                     "CTE",
-                    "HeadingError",
                 ]
                 for i in range(RADAR_COUNT):
                     header.append(f"R{i}")
@@ -248,20 +390,15 @@ class Game:
         collided = 1 if self.car.collided else 0
         accel = round(self.car.instant_acceleration, 2)
 
-        # Calculate CTE and Heading (re-calculate or use stored)
+        # Calculate CTE (re-calculate or use stored)
         # We calculate it here for recording to accuracy
         closest_idx, dist = get_closest_point_on_path(self.car.pos, self.track.path)
         cte = calculate_cross_track_error(self.car.pos, self.track.path, closest_idx)
-        heading_err = calculate_heading_error(
-            self.car.angle, self.car.pos, self.track.path, closest_idx, lookahead=15
-        )
-
+        
         self.cte = cte
-        self.heading_error = heading_err
 
         # Normalize/Round for CSV
         cte = round(cte, 2)
-        heading_err = round(heading_err, 2)
 
         radars = []
         if len(self.car.radars) == RADAR_COUNT:
@@ -274,7 +411,7 @@ class Game:
             for _ in range(RADAR_COUNT):
                 radars.append(0)  # Distance
 
-        row = [w, a, s, d, hb, speed, angle, collided, accel, cte, heading_err] + radars
+        row = [w, a, s, d, hb, speed, angle, collided, accel, cte] + radars
 
         # De-duplication: Only save if changed (ignore first row for simplicity or check)
         if self.telemetry_data:
@@ -286,15 +423,11 @@ class Game:
 
     def get_state(self):
         """Returns the current sensor and telemetry data."""
-        # Calculate CTE and Heading for state
+        # Calculate CTE for state
         closest_idx, _ = get_closest_point_on_path(self.car.pos, self.track.path)
         cte = calculate_cross_track_error(self.car.pos, self.track.path, closest_idx)
-        heading_err = calculate_heading_error(
-            self.car.angle, self.car.pos, self.track.path, closest_idx, lookahead=15
-        )
 
         self.cte = cte
-        self.heading_error = heading_err
 
         radars = []
         if len(self.car.radars) == RADAR_COUNT:
@@ -308,10 +441,18 @@ class Game:
             "angle": self.car.angle,
             "acceleration": self.car.instant_acceleration,
             "cte": cte,
-            "heading_error": heading_err,
             "radars": radars,
             "collided": self.car.collided,
             "total_distance": self.total_distance,
+            # Lap system info
+            "current_lap": self.current_lap,
+            "total_laps": self.total_laps,
+            "current_lap_time": self.get_current_lap_time(),
+            "total_race_time": self.get_total_race_time(),
+            "last_lap_time": self.last_lap_time,
+            "best_lap_time": self.best_lap_time if self.best_lap_time != float('inf') else 0.0,
+            "race_finished": self.race_finished,
+            "crossed_checkpoint": self.crossed_checkpoint,
         }
 
     def step(self, action, training_metrics=None):
@@ -336,8 +477,11 @@ class Game:
         if self.car.collided:
             self.collision_count += 1
 
+        # Check for lap crossing and get lap reward
+        lap_reward = self._check_lap_crossing()
+
         state = self.get_state()
-        done = self.car.collided
+        done = self.car.collided or self.race_finished
         self.draw()
 
         reward = self.car.speed * 0.01
@@ -350,7 +494,10 @@ class Game:
         return state, reward, done, {
             "current_speed": self.car.speed,
             "total_distance": self.total_distance,
-            "collided": self.car.collided
+            "collided": self.car.collided,
+            "lap_reward": lap_reward,
+            "current_lap": self.current_lap,
+            "race_finished": self.race_finished,
         }
 
     def update(self):
@@ -362,17 +509,13 @@ class Game:
             collided = 1 if self.car.collided else 0
             accel = self.car.instant_acceleration
 
-            # Calculate CTE and Heading for Model
+            # Calculate CTE for Model
             closest_idx, _ = get_closest_point_on_path(self.car.pos, self.track.path)
             cte = calculate_cross_track_error(
                 self.car.pos, self.track.path, closest_idx
             )
-            heading_err = calculate_heading_error(
-                self.car.angle, self.car.pos, self.track.path, closest_idx, lookahead=15
-            )
 
             self.cte = cte
-            self.heading_error = heading_err
 
             radars = []
             radars_log = []
@@ -388,9 +531,9 @@ class Game:
                 radars = self.fallback_radar_data
                 radars_log = [np.log1p(r) for r in radars]
 
-            # Input structure must match training data (15 features):
-            # Speed, SteeringAngle, Acceleration, CTE, HeadingError, LogRadars (R0-R9)
-            input_data = [speed, angle, accel, cte, heading_err] + radars_log
+            # Input structure must match training data (14 features):
+            # Speed, SteeringAngle, Acceleration, CTE, LogRadars (R0-R9)
+            input_data = [speed, angle, accel, cte] + radars_log
 
             # Create DataFrame with proper column names to avoid warnings
             input_df = pd.DataFrame([input_data], columns=self.feature_columns)
@@ -637,9 +780,6 @@ class Game:
         cte_surf = self.font.render(f"CTE: {int(self.cte)}", True, WHITE)
         self.screen.blit(cte_surf, (150, 20))
 
-        head_surf = self.font.render(f"Head: {int(self.heading_error)}", True, WHITE)
-        self.screen.blit(head_surf, (150, 50))
-
         # Controls info
         controls_surf = self.font.render("AI Inputs:", True, GREY)
         self.screen.blit(controls_surf, (20, 80))
@@ -721,8 +861,94 @@ class Game:
                 self.screen.blit(sensor_surf, (20, start_y))
                 start_y += font_height
 
+        # Lap Timer Panel (bottom-left)
+        self.draw_lap_hud()
+
         regen_surf = self.font.render("R: New Track | Esc: Quit", True, GREY)
         self.screen.blit(regen_surf, (20, start_y + 5))
+    
+    def draw_lap_hud(self):
+        """Draw lap timer and lap counter on the screen."""
+        # Panel at bottom-left
+        panel_w = 250
+        panel_h = 120
+        panel_x = 10
+        panel_y = HEIGHT - panel_h - 10
+        
+        # Semi-transparent background
+        lap_surf = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        
+        # Color based on race status
+        if self.race_finished:
+            bg_color = (0, 100, 50, 200)  # Green tint for finished
+        elif self.crossed_checkpoint:
+            bg_color = (50, 50, 100, 180)  # Blue tint when checkpoint passed
+        else:
+            bg_color = (0, 0, 0, 160)
+        
+        pygame.draw.rect(lap_surf, bg_color, lap_surf.get_rect(), border_radius=10)
+        self.screen.blit(lap_surf, (panel_x, panel_y))
+        
+        # Title
+        title_font = pygame.font.SysFont("Arial", 18, bold=True)
+        lap_font = pygame.font.SysFont("Arial", 28, bold=True)
+        timer_font = pygame.font.SysFont("Arial", 22)
+        
+        y_offset = panel_y + 8
+        
+        # Lap Counter
+        if self.race_finished:
+            lap_text = "🏁 RACE FINISHED!"
+            lap_color = (100, 255, 100)
+        else:
+            lap_text = f"LAP {self.current_lap + 1}/{self.total_laps}"
+            lap_color = WHITE
+        
+        lap_surf = lap_font.render(lap_text, True, lap_color)
+        self.screen.blit(lap_surf, (panel_x + 10, y_offset))
+        y_offset += 32
+        
+        # Current Lap Timer (Stopwatch)
+        current_time = self.get_current_lap_time()
+        mins = int(current_time // 60)
+        secs = int(current_time % 60)
+        ms = int((current_time % 1) * 100)
+        timer_text = f"⏱ {mins:02d}:{secs:02d}.{ms:02d}"
+        timer_surf = timer_font.render(timer_text, True, (255, 220, 100))
+        self.screen.blit(timer_surf, (panel_x + 10, y_offset))
+        y_offset += 26
+        
+        # Best Lap Time
+        if self.best_lap_time != float('inf'):
+            best_mins = int(self.best_lap_time // 60)
+            best_secs = int(self.best_lap_time % 60)
+            best_ms = int((self.best_lap_time % 1) * 100)
+            best_text = f"Best: {best_mins:02d}:{best_secs:02d}.{best_ms:02d}"
+        else:
+            best_text = "Best: --:--.--"
+        best_surf = title_font.render(best_text, True, (100, 200, 255))
+        self.screen.blit(best_surf, (panel_x + 10, y_offset))
+        
+        # Last Lap Time (if available)
+        if self.last_lap_time > 0:
+            last_mins = int(self.last_lap_time // 60)
+            last_secs = int(self.last_lap_time % 60)
+            last_ms = int((self.last_lap_time % 1) * 100)
+            last_text = f"Last: {last_mins:02d}:{last_secs:02d}.{last_ms:02d}"
+            last_surf = title_font.render(last_text, True, (180, 180, 180))
+            self.screen.blit(last_surf, (panel_x + 130, y_offset))
+        
+        y_offset += 22
+        
+        # Checkpoint indicator
+        if self.crossed_checkpoint:
+            cp_text = "✓ Checkpoint"
+            cp_color = (100, 255, 100)
+        else:
+            cp_text = "○ Checkpoint"
+            cp_color = (150, 150, 150)
+        cp_surf = title_font.render(cp_text, True, cp_color)
+        self.screen.blit(cp_surf, (panel_x + 10, y_offset))
     
     def draw_training_hud(self):
         """Draw RL training metrics overlay on top-right of screen."""

@@ -1,7 +1,9 @@
-import pygame
 import math
+
+import pygame
 from settings import *
-from utils import generate_track_points, compute_track_polygon
+from utils import compute_track_polygon, generate_track_points
+
 
 class Track(pygame.sprite.Sprite):
     def __init__(self):
@@ -84,6 +86,12 @@ class Track(pygame.sprite.Sprite):
                     pygame.draw.line(self.image, WHITE, start_p, end_p, 3)
                     curr_dist += dash_length + gap_length
 
+            # Draw start/finish line (checkered pattern)
+            self._draw_start_finish_line()
+            
+            # Draw checkpoint line (opposite side of track)
+            self._draw_checkpoint_line()
+
         # 6. Start Position
         if self.path:
             self.start_position = self.path[0]
@@ -98,6 +106,64 @@ class Track(pygame.sprite.Sprite):
                 pygame.draw.circle(mask_surf, (0, 0, 0), (int(p[0]), int(p[1])), TRACK_WIDTH // 2)
             
         self.mask = pygame.mask.from_threshold(mask_surf, (255, 255, 255), threshold=(10, 10, 10, 10))
+
+    def _draw_start_finish_line(self):
+        """Draw a checkered start/finish line at the start position."""
+        if not self.path or len(self.path) < 2:
+            return
+        
+        # Get start position and direction
+        p0 = pygame.math.Vector2(self.path[0])
+        p1 = pygame.math.Vector2(self.path[1])
+        
+        direction = (p1 - p0).normalize() if (p1 - p0).length() > 0 else pygame.math.Vector2(1, 0)
+        perpendicular = pygame.math.Vector2(-direction.y, direction.x)
+        
+        # Draw checkered pattern across track width
+        line_half_width = TRACK_WIDTH // 2
+        square_size = 15
+        
+        for i in range(-line_half_width, line_half_width, square_size):
+            for j in range(-2, 3):  # 5 rows of checkers along track direction
+                offset_perp = perpendicular * i
+                offset_dir = direction * (j * square_size)
+                
+                # Alternating color pattern
+                is_white = (i // square_size + j) % 2 == 0
+                color = WHITE if is_white else BLACK
+                
+                # Calculate square corners
+                base = p0 + offset_perp + offset_dir
+                corners = [
+                    base,
+                    base + perpendicular * square_size,
+                    base + perpendicular * square_size + direction * square_size,
+                    base + direction * square_size
+                ]
+                
+                pygame.draw.polygon(self.image, color, [(int(c.x), int(c.y)) for c in corners])
+
+    def _draw_checkpoint_line(self):
+        """Draw a blue checkpoint line on the opposite side of the track from start."""
+        if not self.path or len(self.path) < 2:
+            return
+        
+        # Find checkpoint position (opposite side of track - at 50% of path)
+        checkpoint_idx = int(len(self.path) * LAP_CHECKPOINT_INDEX)
+        p0 = pygame.math.Vector2(self.path[checkpoint_idx])
+        p1 = pygame.math.Vector2(self.path[(checkpoint_idx + 1) % len(self.path)])
+        
+        direction = (p1 - p0).normalize() if (p1 - p0).length() > 0 else pygame.math.Vector2(1, 0)
+        perpendicular = pygame.math.Vector2(-direction.y, direction.x)
+        
+        # Draw blue checkpoint line
+        line_half_width = TRACK_WIDTH // 2
+        start_pos = p0 - perpendicular * line_half_width
+        end_pos = p0 + perpendicular * line_half_width
+        
+        # Draw a thick blue line with white edges
+        pygame.draw.line(self.image, WHITE, start_pos, end_pos, 12)
+        pygame.draw.line(self.image, (50, 100, 255), start_pos, end_pos, 8)  # Blue
 
     def reset(self):
         self.generate()

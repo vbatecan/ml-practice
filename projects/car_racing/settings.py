@@ -19,8 +19,8 @@ CAR_WIDTH = 22
 CAR_HEIGHT = 42
 
 # Physics Constants (Pixels per Second / Seconds)
-MAX_SPEED = 2000  # Pixels/sec
-ACCELERATION = 700  # Pixels/sec^2
+MAX_SPEED = 1000  # Pixels/sec
+ACCELERATION = 1000  # Pixels/sec^2
 BRAKE_STRENGTH = 1200  # Pixels/sec^2
 FRICTION = 200  # Natural deceleration (rolling resistance)
 DRAG = 0.00100  # Air resistance factor (v^2)
@@ -28,11 +28,11 @@ TURN_SPEED = 180  # Degrees/sec
 STEERING_SMOOTHING = (
     6.0  # Smoothness factor for steering (higher = more responsive/faster)
 )
-THROTTLE_RAMP = 3.0  # How fast throttle builds up (0 to 1)
+THROTTLE_RAMP = 5.0  # How fast throttle builds up (0 to 1)
 BRAKE_RAMP = 5.0  # How fast brakes build up
 HUD_SPEED_FACTOR = 0.25  # Pixels/s to km/h
 HUD_ACCEL_FACTOR = 0.0694  # Pixels/s^2 to m/s^2 (Approx based on speed scaling)
-DRIFT_FACTOR = 8  # Higher = less drift (grip), Lower = more drift
+DRIFT_FACTOR = 12  # Higher = less drift (grip), Lower = more drift
 HANDBRAKE_FRICTION = 1000  # High friction when handbraking
 HANDBRAKE_DRIFT_FACTOR = 1.0  # Very slippery, high drift
 
@@ -40,10 +40,10 @@ HANDBRAKE_DRIFT_FACTOR = 1.0  # Very slippery, high drift
 TRACK_WIDTH = 225
 
 # Huge world settings
-NUM_POINTS = 35
-MIN_RADIUS = 2000
-MAX_RADIUS = 3000
-SMOOTHING_ITERATIONS = 5
+NUM_POINTS = 30
+MIN_RADIUS = 1000
+MAX_RADIUS = 2000
+SMOOTHING_ITERATIONS = 8
 
 # World bounds (just for reference, track determines actual size)
 WORLD_PADDING = 500
@@ -74,9 +74,18 @@ AI_FLOAT_CONTROL = False
 # RL Environment Settings
 RL_HEADLESS = False  # Set to True for faster training, False to visualize
 RL_FIXED_DT = 1 / FPS
-REPLAY_MEMORY = 50000  # Large replay buffer for experience diversity
+REPLAY_MEMORY = 1000000  # Large replay buffer for experience diversity
 BATCH_SIZE = 256  # Larger batch for stable gradients
 
 # Telemetry Settings
 TELEMETRY_CLEANUP_ENABLED = False
 TELEMETRY_LOOKBACK_SECONDS = 2.0
+
+# Lap System Settings
+TOTAL_LAPS = 3  # Number of laps to complete a race
+LAP_CHECKPOINT_INDEX = 0.5  # Position on track (0-1) for lap line (0.5 = opposite side)
+LAP_BASE_REWARD = 100.0  # Base reward for completing a lap
+LAP_FINAL_MULTIPLIER = 3.0  # Multiplier for finishing final lap
+EXPECTED_LAP_TIME = 60.0  # Expected time in seconds for a decent lap
+TIME_BONUS_MAX = 200.0  # Maximum time bonus for a fast lap
+TIME_PENALTY_PER_SECOND = 2.0  # Penalty per second over expected time (capped)
