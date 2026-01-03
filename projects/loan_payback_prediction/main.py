@@ -1,13 +1,18 @@
 import pandas as pd
 import tensorflow as tf
+from imblearn.over_sampling._smote.base import SMOTE
 from keras import Sequential
 from keras.src.layers import Dense
+from sklearn.metrics._classification import f1_score, precision_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.python.keras.callbacks import EarlyStopping
 
-frame = pd.read_csv("train.csv")
+USE_SMOTE = True
+DATA = "train.csv"
+MODEL = "model2.keras"
 
+frame = pd.read_csv(DATA)
 scaler = MinMaxScaler()
 
 # Dummies
@@ -32,6 +37,11 @@ x = scaler.fit_transform(x)
 # model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)
 x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.1, random_state=42)
 
+# Use SMOTE
+if USE_SMOTE:
+    smote = SMOTE()
+    x_train, y_train = smote.fit_resample(x_train, y_train)
+
 # Convert to tensor
 x_train_tf = tf.convert_to_tensor(x, dtype=tf.float32)
 x_test_tf = tf.convert_to_tensor(x_test, dtype=tf.float32)
@@ -46,12 +56,19 @@ model = Sequential([
 ])
 
 early_stopping = EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)
-model.compile(optimizer="adam", loss="binary_cross entropy", metrics=["accuracy"])
-model.fit(x_train, y_train, epochs=20, validation_split=0.2, callbacks=[early_stopping])
-model.save("model.keras")
+model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+model.fit(x_train, y_train, epochs=100, validation_split=0.2, callbacks=[early_stopping])
+model.save(MODEL)
 
 evaluate = model.evaluate(x_test, y_test)
 print(f"Evaluation: {evaluate}")
 print(f"Test loss: {evaluate[0]}")
 print(f"Test accuracy: {evaluate[1]}")
-predictions = model.predict(x_test)
+print(f"F1 Score macro: {f1_score(y_test, y_pred, average='macro')}")
+print(f"F1 Score micro: {f1_score(y_test, y_pred, average='micro')}")
+print(f"F1 Score weighted: {f1_score(y_test, y_pred, average='weighted')}")
+print(f"Precision macro: {precision_score(y_test, y_pred, average='macro')}")
+print(f"Precision micro: {precision_score(y_test, y_pred, average='micro')}")
+print(f"Precision weighted: {precision_score(y_test, y_pred, average='weighted')}")
+print("Confusion matrix:")
+print(confusion_matrix(y_test, y_pred))
