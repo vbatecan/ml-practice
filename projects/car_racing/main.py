@@ -79,6 +79,11 @@ class Game:
         # Training metrics (set by RL training loop)
         self.training_metrics = None
 
+        # Time Manipulation
+        self.time_scale = 1.0
+        self.frame_count = 0
+        self.pending_updates = 0.0
+
         # Flashlight Surface
         if FLASHLIGHT_MODE and not RL_HEADLESS:
             self.flashlight_surf = pygame.Surface((WIDTH, HEIGHT))
@@ -236,8 +241,23 @@ class Game:
             self.events()
 
             # Update
-            self.dt = min(self.clock.tick(FPS) / 1000.0, 0.1)
-            self.update()
+            if self.time_scale > 1.0:
+                # Fast Forward: Run multiple updates per frame
+                self.clock.tick(FPS)
+                base_dt = 1.0 / FPS
+                
+                self.pending_updates += self.time_scale
+                loops = int(self.pending_updates)
+                self.pending_updates -= loops
+                
+                self.dt = base_dt
+                for _ in range(loops):
+                    self.update()
+            else:
+                # Normal or Slow Motion
+                real_dt = min(self.clock.tick(FPS) / 1000.0, 0.1)
+                self.dt = real_dt * self.time_scale
+                self.update()
 
             # Draw
             self.draw()
@@ -253,6 +273,14 @@ class Game:
                     self.save_telemetry()
                 if event.key == pygame.K_ESCAPE:
                     self.running = False
+                
+                # Time Scale Controls
+                if event.key == pygame.K_LEFTBRACKET: # [
+                    self.time_scale = max(0.1, self.time_scale / 2.0)
+                    print(f"Time Scale: {self.time_scale:.2f}x")
+                if event.key == pygame.K_RIGHTBRACKET: # ]
+                    self.time_scale = min(100.0, self.time_scale * 2.0)
+                    print(f"Time Scale: {self.time_scale:.2f}x")
 
     def reset_game(self):
         try:
@@ -481,8 +509,33 @@ class Game:
         lap_reward = self._check_lap_crossing()
 
         state = self.get_state()
-        done = self.car.collided or self.race_finished
-        self.draw()
+        
+        # Handle Time Scale & Rendering
+        self.frame_count += 1
+        should_render = True
+        
+        if self.time_scale > 1.0:
+            render_skip = int(self.time_scale)
+            if self.frame_count % render_skip != 0:
+                should_render = False
+        elif self.time_scale < 1.0:
+            # Slow motion delay
+            # We want each step (RL_FIXED_DT) to take longer
+            target_frame_time = RL_FIXED_DT / self.time_scale
+            # Sleep the difference (approx)
+            delay = target_frame_time - RL_FIXED_DT
+            if delay > 0:
+                time_module.sleep(delay)
+
+        if should_render:
+            self.draw()
+            # Process events to allow input (like changing time scale) during training
+            self.events()
+
+        if not self.running:
+            done = True
+        else:
+            done = self.car.collided or self.race_finished
 
         reward = self.car.speed * 0.01
 
