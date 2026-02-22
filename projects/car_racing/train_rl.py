@@ -40,7 +40,7 @@ _total_steps = 0
 def graceful_shutdown(signum, frame):
     """Handle Ctrl+C gracefully by saving state before exit."""
     global _current_agent, _current_episode, _best_reward, _total_steps
-    print("\n\n⚠️  Interrupt received! Saving state...")
+    print("\n\n⚠Interrupt received! Saving state...")
 
     if _current_agent is not None:
         # Save inference model
@@ -91,8 +91,6 @@ def preprocess_state(state_dict):
     acceleration = np.clip(state_dict["acceleration"] / 500.0, -1, 1)
     cte = np.clip(state_dict["cte"] / 100.0, -1, 1)
 
-    # 3. Combine into feature vector
-    # Order: [speed, angle, acceleration, cte, R0...Rn]
     base_features = np.array([speed, angle, acceleration, cte], dtype=np.float32)
     return np.concatenate([base_features, radars_log])
 
@@ -129,7 +127,7 @@ def calculate_reward(state_dict, prev_state_dict, action_vector):
 
     # Reward for speed
     if speed > _SLOW_THRESHOLD:
-        reward += speed * 0.003
+        reward += speed * 0.005
 
     # === TIME-BASED SLOW PENALTY ===
     if speed < _SLOW_THRESHOLD:
@@ -275,7 +273,6 @@ def train(resume=False):
     print(f"Action size: {action_size} (Continuous)")
 
     agent = SACAgent(state_size, action_size)
-    _current_agent = agent
 
     logger = TrainingLogger()
     metrics = TrainingMetrics()
@@ -286,7 +283,7 @@ def train(resume=False):
 
     # Action repeat helps with continuous control too, but SAC controls are smooth.
     # We can use a small repeat or 1.
-    ACTION_REPEAT = 2
+    ACTION_REPEAT = 1
 
     save_dir = CHECKPOINT_DIR
     os.makedirs(save_dir, exist_ok=True)
@@ -329,7 +326,6 @@ def train(resume=False):
 
         episode_reward = 0.0
         episode_critic_loss = 0.0
-        episode_actor_loss = 0.0
         train_steps = 0
 
         start_time = time.time()
